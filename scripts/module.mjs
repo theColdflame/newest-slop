@@ -12,8 +12,8 @@ Hooks.once("init", () => {
 
   // Register Module Settings
   game.settings.register("wod5e-dynamic-tile-tracker", "enableDebug", {
-    name: game.i18n.localize("WOD5E_TILE.SettingsEnableDebug"),
-    hint: game.i18n.localize("WOD5E_TILE.SettingsEnableDebugHint"),
+    name: game.i18n.localize("WOD5E_TILE.SettingsEnableDebug") || "Enable Debug Logging",
+    hint: game.i18n.localize("WOD5E_TILE.SettingsEnableDebugHint") || "Logs dynamic tile evaluation decisions to developer console.",
     scope: "world",
     config: true,
     type: Boolean,
@@ -21,8 +21,8 @@ Hooks.once("init", () => {
   });
 
   game.settings.register("wod5e-dynamic-tile-tracker", "updateDebounce", {
-    name: game.i18n.localize("WOD5E_TILE.SettingsUpdateDebounce"),
-    hint: game.i18n.localize("WOD5E_TILE.SettingsUpdateDebounceHint"),
+    name: game.i18n.localize("WOD5E_TILE.SettingsUpdateDebounce") || "Update Throttle Debounce (ms)",
+    hint: game.i18n.localize("WOD5E_TILE.SettingsUpdateDebounceHint") || "Throttle rapid health/willpower adjustments before tile texture renders.",
     scope: "world",
     config: true,
     type: Number,
@@ -37,7 +37,6 @@ Hooks.once("ready", () => {
 
 // Reactivity Hooks for Real-Time Actor Tracker Updates
 Hooks.on("updateActor", (actor, changes, options, userId) => {
-  // Check if changes affect Health, Willpower, Hunger, Rage, or Desperation
   const sys = changes.system;
   if (!sys) return;
 
@@ -50,6 +49,19 @@ Hooks.on("updateActor", (actor, changes, options, userId) => {
   }
 });
 
+// Pre-update hook to parse dynamic rule JSON before saving
+Hooks.on("preUpdateTile", (tileDoc, changes, options, userId) => {
+  const config = changes.flags?.["wod5e-dynamic-tile-tracker"]?.config;
+  if (config && typeof config.rulesJson === "string") {
+    try {
+      config.rules = JSON.parse(config.rulesJson);
+      delete config.rulesJson;
+    } catch (e) {
+      console.error("WoD5e Dynamic Tile Tracker | Error parsing rulesJson in preUpdateTile:", e);
+    }
+  }
+});
+
 // Re-eval Tile when Tile Document is Updated or Created
 Hooks.on("updateTile", (tileDoc, changes, options, userId) => {
   const flags = changes.flags?.["wod5e-dynamic-tile-tracker"];
@@ -58,12 +70,12 @@ Hooks.on("updateTile", (tileDoc, changes, options, userId) => {
   }
 });
 
-// Inject Custom Configuration Tab into Tile Config Application
+// Inject Custom Configuration Tab into Tile Config Sheet
 Hooks.on("renderTileConfig", (app, html, data) => {
   WoD5eTileConfigExtension.attachTab(app, html, data);
 });
 
-// Add HUD Action Button to Tile HUD
+// Add HUD Action Button to Canvas Tile HUD
 Hooks.on("renderTileHUD", (app, html, data) => {
   WoD5eTileHUDExtension.attachButton(app, html, data);
 });
