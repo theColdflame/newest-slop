@@ -64,10 +64,14 @@ const app = new Hono()
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const response = await app.fetch(request, env);
-    if (response.status !== 404) {
-      return response;
+    const url = new URL(request.url);
+
+    // If API route or module.json, let Hono handle it
+    if (url.pathname.endsWith("/module.json") || url.pathname.includes("/api/")) {
+      return app.fetch(request, env);
     }
+
+    // Serve static assets from public/ directory
     return env.ASSETS.fetch(request);
   }
 };
