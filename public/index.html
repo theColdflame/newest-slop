@@ -33,24 +33,17 @@
     }
   </script>
 
-  <!-- Importmap -->
-  <script type="importmap">
-  {
-    "imports": {
-      "react": "https://esm.sh/react@18.3.1",
-      "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
-      "react-dom": "https://esm.sh/react-dom@18.3.1",
-      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
-      "lucide-react": "https://esm.sh/lucide-react@0.400.0?external=react,react-dom",
-      "jszip": "https://esm.sh/jszip@3.10.1",
-      "htm": "https://esm.sh/htm@3.1.1"
-    }
-  }
-  </script>
+  <!-- React 18, ReactDOM 18, HTM, JSZip from reliable CDNs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+  <!-- Font Awesome Icons for Foundry VTT style icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
 
   <!-- Custom Styles for Foundry VTT Theme Simulation -->
   <style>
-    /* Custom scrollbar */
     ::-webkit-scrollbar {
       width: 6px;
       height: 6px;
@@ -80,7 +73,6 @@
       box-shadow: 0 0 15px rgba(217, 119, 6, 0.3);
     }
 
-    /* Grid canvas pattern */
     .bg-grid-pattern {
       background-size: 40px 40px;
       background-image: 
@@ -91,6 +83,6 @@
 </head>
 <body class="h-full font-sans antialiased bg-slate-950 text-slate-100 flex flex-col overflow-x-hidden">
   <div id="root" class="h-full flex flex-col"></div>
-  <script type="module" src="./app.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>

@@ -1,41 +1,8 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { createRoot } from "react-dom/client";
-import htm from "htm";
-import { 
-  Heart, 
-  Flame, 
-  Brain, 
-  Image as ImageIcon, 
-  Sliders, 
-  Download, 
-  Copy, 
-  Check, 
-  FileCode, 
-  Layers, 
-  Play, 
-  RefreshCw, 
-  ShieldAlert, 
-  Sparkles, 
-  ExternalLink, 
-  BookOpen, 
-  Eye, 
-  Plus, 
-  Trash2, 
-  Settings, 
-  User, 
-  Zap, 
-  Info,
-  CheckCircle2,
-  AlertTriangle,
-  FolderZip,
-  Wand2,
-  FolderOpen
-} from "lucide-react";
-import JSZip from "jszip";
+const { useState, useEffect, useMemo, createElement: h } = React;
+const { createRoot } = ReactDOM;
+const html = htm.bind(h);
 
-const html = htm.bind(React.createElement);
-
-// MODULE FILE CONTENTS
+// MODULE FILE CONTENTS FOR ZIP PACKAGING
 const MODULE_JSON_CONTENT = `{
   "id": "wod5e-dynamic-tile-tracker",
   "title": "World of Darkness 5e - Dynamic Tile Tracker",
@@ -305,6 +272,102 @@ export class WoD5eTileTrackerEngine {
 }
 `;
 
+const TILE_CONFIG_EXTENSION_MJS_CONTENT = `/**
+ * Extension for Tile Config Sheet in Foundry VTT v14
+ */
+
+export class WoD5eTileConfigExtension {
+  static attachTab(app, html, data) {
+    const nav = html.find("nav.sheet-tabs, nav.tabs");
+    if (!nav.length) return;
+
+    const tabButton = \`
+      <a class="item" data-tab="wod5e-tracker">
+        <i class="fas fa-tint text-red-500"></i> WoD5e Tracker
+      </a>
+    \`;
+    nav.append(tabButton);
+
+    const tileDoc = app.object;
+    const config = tileDoc?.getFlag("wod5e-dynamic-tile-tracker", "config") || {
+      enabled: false,
+      actorId: "",
+      defaultImage: tileDoc?.texture?.src || "",
+      statMap: {
+        enabled: true,
+        statType: "hunger",
+        levels: {}
+      },
+      rules: []
+    };
+
+    const actors = game.actors.contents.map(a => \`<option value="\${a.id}" \${a.id === config.actorId ? "selected" : ""}>\${a.name}</option>\`).join("");
+
+    const tabContent = \`
+      <div class="tab wod5e-tracker-tab" data-tab="wod5e-tracker">
+        <div class="form-group">
+          <label>Enable Real-Time WoD5e Tracking</label>
+          <input type="checkbox" name="flags.wod5e-dynamic-tile-tracker.config.enabled" \${config.enabled ? "checked" : ""}/>
+        </div>
+
+        <div class="form-group">
+          <label>Target Actor</label>
+          <select name="flags.wod5e-dynamic-tile-tracker.config.actorId">
+            <option value="">-- Select Actor --</option>
+            \${actors}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Default / Fallback Texture</label>
+          <div class="form-fields">
+            <input type="text" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="\${config.defaultImage || ''}"/>
+            <button type="button" class="file-picker wod5e-browse-btn" data-type="imagevideo" data-target="flags.wod5e-dynamic-tile-tracker.config.defaultImage">
+              <i class="fas fa-folder-open"></i> Browse
+            </button>
+          </div>
+        </div>
+      </div>
+    \`;
+
+    const body = html.find("section.sheet-body");
+    body.append(tabContent);
+  }
+}
+`;
+
+const TILE_HUD_EXTENSION_MJS_CONTENT = `/**
+ * Tile HUD Extension for quick toggle and refresh
+ */
+
+export class WoD5eTileHUDExtension {
+  static attachButton(app, html, data) {
+    const tileDoc = app.object?.document;
+    if (!tileDoc) return;
+
+    const config = tileDoc.getFlag("wod5e-dynamic-tile-tracker", "config");
+    if (!config || !config.enabled) return;
+
+    const btn = \`
+      <div class="control-icon wod5e-hud-btn" title="Re-evaluate WoD5e Dynamic Tile">
+        <i class="fas fa-blood-drop text-red-500"></i>
+      </div>
+    \`;
+
+    const col = html.find(".col.right");
+    if (col.length) {
+      const el = $(btn);
+      el.click(async () => {
+        const { WoD5eTileTrackerEngine } = await import("./wod5e-tile-tracker.mjs");
+        await WoD5eTileTrackerEngine.evaluateTile(tileDoc);
+        ui.notifications.info("WoD5e Dynamic Tile re-evaluated!");
+      });
+      col.append(el);
+    }
+  }
+}
+`;
+
 const DEFAULT_HUNGER_LEVEL_MAP = {
   "0": "https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=600&auto=format&fit=crop&q=80",
   "1": "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=600&auto=format&fit=crop&q=80",
@@ -314,10 +377,19 @@ const DEFAULT_HUNGER_LEVEL_MAP = {
   "5": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80"
 };
 
+const STAT_TYPES = [
+  { id: "hunger", label: "Hunger / Rage / Desperation (0 to 5)", maxLevel: 5 },
+  { id: "health_agg", label: "Aggravated Health Damage (0 to 10)", maxLevel: 10 },
+  { id: "health_sup", label: "Superficial Health Damage (0 to 10)", maxLevel: 10 },
+  { id: "health_total", label: "Total Health Damage (0 to 10)", maxLevel: 10 },
+  { id: "health_remaining", label: "Remaining Health Points (0 to 10)", maxLevel: 10 },
+  { id: "willpower_agg", label: "Aggravated Willpower Damage (0 to 10)", maxLevel: 10 },
+  { id: "willpower_total", label: "Total Willpower Damage (0 to 10)", maxLevel: 10 }
+];
+
 function App() {
   const [activeTab, setActiveTab] = useState("simulator");
   const [actorName, setActorName] = useState("Julian the Toreador");
-  const [trackerMode, setTrackerMode] = useState("hunger"); // 'hunger', 'health', 'willpower'
   const [hungerVal, setHungerVal] = useState(2);
   const [healthMax, setHealthMax] = useState(6);
   const [healthAgg, setHealthAgg] = useState(0);
@@ -327,14 +399,14 @@ function App() {
   const [wpSup, setWpSup] = useState(1);
   const [isDownloading, setIsDownloading] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [simulatedLog, setSimulatedLog] = useState([]);
 
   // Stat level images state
   const [statMapType, setStatMapType] = useState("hunger");
   const [hungerLevelImages, setHungerLevelImages] = useState(DEFAULT_HUNGER_LEVEL_MAP);
   const [autoFillPattern, setAutoFillPattern] = useState("modules/wod5e-dynamic-tile-tracker/assets/vampire_hunger_{level}.webp");
+  const [defaultImage, setDefaultImage] = useState(DEFAULT_HUNGER_LEVEL_MAP["0"]);
 
-  // Conditional priority rules state
+  // Priority Rules State
   const [rules, setRules] = useState([
     { id: "1", name: "Torpor Condition", conditionType: "health_torpor", value: 6, image: "https://images.unsplash.com/photo-1509198397868-475647b2a1e5?w=600&auto=format&fit=crop&q=80", tint: "#581c87", alpha: 0.8, enabled: true },
     { id: "2", name: "High Aggravated Health", conditionType: "health_aggravated", value: 3, image: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80", tint: "#991b1b", alpha: 1.0, enabled: true },
@@ -353,7 +425,7 @@ function App() {
       if (levelImg && levelImg.trim().length > 0) {
         return {
           type: "level_map",
-          matchedName: `Hunger Level ${hungerVal} Exact Image`,
+          matchedName: `Hunger Level ${hungerVal} Specific Image`,
           image: levelImg,
           tint: null,
           alpha: 1.0,
@@ -392,39 +464,25 @@ function App() {
     return {
       type: "default",
       matchedName: "Default Base Texture",
-      image: DEFAULT_HUNGER_LEVEL_MAP["0"],
+      image: defaultImage || DEFAULT_HUNGER_LEVEL_MAP["0"],
       tint: null,
       alpha: 1.0,
       scale: 1.0
     };
-  }, [statMapType, hungerLevelImages, hungerVal, healthMax, healthAgg, healthSup, wpMax, wpAgg, wpSup, rules]);
-
-  // Record log entry
-  useEffect(() => {
-    const timestamp = new Date().toLocaleTimeString();
-    const logEntry = {
-      id: Date.now(),
-      time: timestamp,
-      actor: actorName,
-      matchedRule: tileEvaluation.matchedName,
-      sourceType: tileEvaluation.type === "level_map" ? `Stat Level Map [Hunger = ${hungerVal}]` : tileEvaluation.type === "rule" ? "Rule Priority Match" : "Default Base Image",
-      tint: tileEvaluation.tint || "None",
-      healthState: isTorpor ? "TORPOR" : isHealthImpaired ? "IMPAIRED" : `${healthAgg} Agg / ${healthSup} Sup`,
-      hungerState: `Hunger ${hungerVal}/5`
-    };
-
-    setSimulatedLog(prev => [logEntry, ...prev.slice(0, 9)]);
-  }, [tileEvaluation, healthAgg, healthSup, hungerVal, isTorpor, isHealthImpaired]);
+  }, [statMapType, hungerLevelImages, hungerVal, healthMax, healthAgg, healthSup, wpMax, wpAgg, wpSup, rules, defaultImage]);
 
   const handleDownloadZip = async () => {
+    setIsDownloading(true);
     try {
-      setIsDownloading(true);
       const zip = new JSZip();
-      const folder = zip.folder("wod5e-dynamic-tile-tracker");
-      
-      folder.file("module.json", MODULE_JSON_CONTENT);
-      folder.file("scripts/module.mjs", MODULE_MJS_CONTENT);
-      folder.file("scripts/wod5e-tile-tracker.mjs", WOD5E_TILE_TRACKER_MJS_CONTENT);
+      zip.file("module.json", MODULE_JSON_CONTENT);
+      zip.file("README.md", `# World of Darkness 5e - Dynamic Tile Tracker\n\nFoundry VTT v14 & WoD5e 5.3.28 module.`);
+      zip.file("lang/en.json", `{\n  "WOD5E_TILE.TabTitle": "WoD5e Tracker"\n}`);
+      zip.file("styles/module.css", `/* WoD5e Dynamic Tile Tracker CSS */\n.wod5e-tracker-tab { padding: 8px; }`);
+      zip.file("scripts/module.mjs", MODULE_MJS_CONTENT);
+      zip.file("scripts/wod5e-tile-tracker.mjs", WOD5E_TILE_TRACKER_MJS_CONTENT);
+      zip.file("scripts/tile-config-extension.mjs", TILE_CONFIG_EXTENSION_MJS_CONTENT);
+      zip.file("scripts/tile-hud-extension.mjs", TILE_HUD_EXTENSION_MJS_CONTENT);
 
       const blob = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(blob);
@@ -436,70 +494,61 @@ function App() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("ZIP Generation error:", err);
+      console.error("ZIP package error:", err);
+      alert("Error generating zip package: " + err.message);
     } finally {
       setIsDownloading(false);
     }
   };
 
-  const handleCopyManifest = () => {
-    const url = "https://raw.githubusercontent.com/foundryvtt/wod5e-dynamic-tile-tracker/main/module.json";
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const applyAutoFillPattern = () => {
-    const newMap = { ...hungerLevelImages };
-    for (let i = 0; i <= 5; i++) {
-      newMap[String(i)] = autoFillPattern.replace("{level}", String(i));
+  const handleAutoFillPattern = () => {
+    if (!autoFillPattern.includes("{level}")) {
+      alert("Pattern must include '{level}' placeholder, e.g. tiles/hunger_{level}.webp");
+      return;
+    }
+    const max = STAT_TYPES.find(s => s.id === statMapType)?.maxLevel || 5;
+    const newMap = {};
+    for (let i = 0; i <= max; i++) {
+      newMap[String(i)] = autoFillPattern.replace("{level}", i);
     }
     setHungerLevelImages(newMap);
   };
 
+  const currentMaxLevel = STAT_TYPES.find(s => s.id === statMapType)?.maxLevel || 5;
+
   return html`
-    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 font-sans">
-      <!-- Top Banner Header -->
-      <header className="bg-slate-900/90 border-b border-red-900/40 backdrop-blur sticky top-0 z-40 px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
+      <!-- Top Navigation Header -->
+      <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-50">
         <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-lg bg-red-950/60 border border-red-600 flex items-center justify-center shadow-lg shadow-red-900/30">
-            <${Flame} className="w-6 h-6 text-red-500 animate-pulse" />
+          <div className="w-10 h-10 rounded-lg bg-red-950 border border-red-700 flex items-center justify-center text-red-500 shadow-lg shadow-red-950/50">
+            <i className="fas fa-droplet text-lg"></i>
           </div>
           <div>
-            <h1 className="font-serif text-lg md:text-xl font-bold tracking-wide text-red-100 flex items-center gap-2">
-              WoD5e Dynamic Tile Tracker
-              <span className="text-xs font-sans px-2 py-0.5 rounded-full bg-red-950/80 text-red-400 border border-red-800">
+            <div className="flex items-center space-x-2">
+              <h1 className="font-serif font-bold text-lg text-slate-100">WoD5e Dynamic Tile Tracker</h1>
+              <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-800 font-semibold">
                 Foundry VTT v14
               </span>
-            </h1>
-            <p className="text-xs text-slate-400">
-              Real-time Canvas Tile Images per Stat Level (Hunger / Health / Willpower) & Priority Rules
-            </p>
+            </div>
+            <p className="text-xs text-slate-400">WoD5e System 5.3.28 Compatible • Real-time Health, Willpower & Hunger Sync</p>
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
-          <button
-            onClick=${handleCopyManifest}
-            className="hidden sm:flex items-center space-x-1.5 px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 border border-slate-700 transition"
-          >
-            ${copied ? html`<${Check} className="w-3.5 h-3.5 text-emerald-400" />` : html`<${Copy} className="w-3.5 h-3.5 text-slate-400" />`}
-            <span>${copied ? "Manifest Copied!" : "Copy Manifest URL"}</span>
-          </button>
-
+        <div className="flex items-center space-x-3">
           <button
             onClick=${handleDownloadZip}
             disabled=${isDownloading}
-            className="flex items-center space-x-2 px-4 py-2 rounded-md bg-red-700 hover:bg-red-600 text-xs font-semibold text-white shadow-md shadow-red-900/40 transition border border-red-500"
+            className="px-4 py-2 bg-gradient-to-r from-red-700 to-red-900 hover:from-red-600 hover:to-red-800 text-white font-medium text-xs rounded-lg border border-red-500 shadow-lg shadow-red-950/50 flex items-center space-x-2 transition disabled:opacity-50"
           >
-            <${FolderZip} className="w-4 h-4" />
-            <span>${isDownloading ? "Generating ZIP..." : "Download Module ZIP"}</span>
+            <i className=${`fas ${isDownloading ? "fa-spinner fa-spin" : "fa-file-zipper"}`}></i>
+            <span>${isDownloading ? "Packaging..." : "Download Module ZIP"}</span>
           </button>
         </div>
       </header>
 
       <!-- Navigation Tabs -->
-      <nav className="bg-slate-900 border-b border-slate-800 px-4 flex items-center gap-2 overflow-x-auto text-xs font-medium">
+      <nav className="bg-slate-900/80 border-b border-slate-800 px-4 flex items-center gap-2 overflow-x-auto text-xs font-medium">
         <button
           onClick=${() => setActiveTab("simulator")}
           className=${`px-4 py-3 border-b-2 flex items-center space-x-2 transition whitespace-nowrap ${
@@ -508,7 +557,7 @@ function App() {
               : "border-transparent text-slate-400 hover:text-slate-200"
           }`}
         >
-          <${Eye} className="w-4 h-4 text-red-400" />
+          <i className="fas fa-eye text-red-400"></i>
           <span>Interactive Canvas Simulator</span>
         </button>
 
@@ -520,7 +569,7 @@ function App() {
               : "border-transparent text-slate-400 hover:text-slate-200"
           }`}
         >
-          <${ImageIcon} className="w-4 h-4 text-amber-400" />
+          <i className="fas fa-image text-amber-400"></i>
           <span>Images per Stat Level Grid</span>
         </button>
 
@@ -532,7 +581,7 @@ function App() {
               : "border-transparent text-slate-400 hover:text-slate-200"
           }`}
         >
-          <${Sliders} className="w-4 h-4 text-purple-400" />
+          <i className="fas fa-sliders text-purple-400"></i>
           <span>Priority Rules Builder</span>
         </button>
       </nav>
@@ -545,7 +594,7 @@ function App() {
             <div className="lg:col-span-5 space-y-6 bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-xl">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <h2 className="font-serif text-base font-bold text-red-200 flex items-center gap-2">
-                  <${User} className="w-4 h-4 text-red-400" />
+                  <i className="fas fa-user-ninja text-red-400"></i>
                   Actor & Tracker Controls
                 </h2>
                 <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
@@ -553,11 +602,11 @@ function App() {
                 </span>
               </div>
 
-              <!-- HUNGER TRACKER SLIDER -->
+              <!-- HUNGER TRACKER -->
               <div className="bg-slate-950 p-4 rounded-lg border border-red-950/60 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2 text-red-400 font-semibold text-sm">
-                    <${Flame} className="w-4 h-4 fill-red-500/20 text-red-500" />
+                    <i className="fas fa-fire text-red-500"></i>
                     <span>Hunger Level Tracker</span>
                   </div>
                   <span className="text-xs font-bold px-2.5 py-0.5 rounded bg-red-950 text-red-300 border border-red-800">
@@ -589,7 +638,7 @@ function App() {
               <div className="bg-slate-950 p-4 rounded-lg border border-red-950/60 space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2 text-red-400 font-semibold text-sm">
-                    <${Heart} className="w-4 h-4 fill-red-500/20 text-red-500" />
+                    <i className="fas fa-heart text-red-500"></i>
                     <span>Health Tracker</span>
                   </div>
                   <div className="text-xs">
@@ -617,7 +666,7 @@ function App() {
                       onChange=${(e) => {
                         const val = Number(e.target.value);
                         setHealthAgg(val);
-                        if (val + healthSup > healthMax) setHealthSup(healthMax - val);
+                        if (val + healthSup > healthMax) setHealthSup(Math.max(0, healthMax - val));
                       }}
                       className="w-full accent-red-600 bg-slate-800 rounded h-1.5 cursor-pointer"
                     />
@@ -641,58 +690,65 @@ function App() {
               </div>
             </div>
 
-            <!-- Right Column: Canvas Preview -->
-            <div className="lg:col-span-7 space-y-6">
-              <div className="bg-slate-900 rounded-xl border border-slate-800 p-5 shadow-xl space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <h3 className="font-serif text-base font-bold text-slate-200 flex items-center gap-2">
-                    <${Layers} className="w-4 h-4 text-red-400" />
-                    Simulated Foundry VTT Canvas Tile
-                  </h3>
-                  <span className="text-xs px-2.5 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono">
-                    Active Rule: ${tileEvaluation.matchedName}
-                  </span>
+            <!-- Right Column: Simulated VTT Canvas View -->
+            <div className="lg:col-span-7 bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-xl flex flex-col space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center space-x-2">
+                  <i className="fas fa-layer-group text-red-400"></i>
+                  <h2 className="font-serif text-base font-bold text-slate-100">Live Foundry Canvas Tile Rendering</h2>
                 </div>
+                <div className="flex items-center space-x-2 text-xs">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                  <span className="text-slate-400">Real-Time Evaluation</span>
+                </div>
+              </div>
 
-                <!-- Tile Canvas Viewport -->
-                <div className="relative w-full h-80 rounded-lg overflow-hidden bg-slate-950 bg-grid-pattern flex items-center justify-center border border-slate-800 shadow-inner">
-                  <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-slate-900/90 backdrop-blur px-2.5 py-1 rounded border border-slate-800 text-xs">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-                    <span className="text-slate-300 font-mono text-[11px]">Dynamic Canvas Render</span>
-                  </div>
-
-                  <img
-                    src=${tileEvaluation.image}
-                    alt="Tile Texture"
-                    className="max-h-full max-w-full object-contain rounded shadow-2xl transition-all duration-300"
+              <!-- SIMULATED CANVAS TILE -->
+              <div className="relative aspect-video rounded-xl overflow-hidden border border-slate-800 bg-grid-pattern bg-slate-950 flex items-center justify-center p-6 shadow-inner">
+                <div className="relative group transition-all duration-300 transform scale-100">
+                  <div
+                    className="w-64 h-64 rounded-lg overflow-hidden border-2 border-red-900/60 shadow-2xl transition-all duration-500 relative"
                     style=${{
-                      filter: tileEvaluation.tint ? `drop-shadow(0 0 15px ${tileEvaluation.tint})` : 'none',
+                      backgroundImage: `url(${tileEvaluation.image})`,
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
                       opacity: tileEvaluation.alpha,
                       transform: `scale(${tileEvaluation.scale})`
                     }}
-                  />
+                  >
+                    ${tileEvaluation.tint && html`
+                      <div
+                        className="absolute inset-0 transition-all duration-300 pointer-events-none mix-blend-multiply"
+                        style=${{ backgroundColor: tileEvaluation.tint, opacity: 0.7 }}
+                      />
+                    `}
 
-                  <div className="absolute bottom-3 right-3 z-10 bg-slate-900/90 backdrop-blur px-3 py-1.5 rounded border border-slate-800 text-xs flex items-center gap-3 font-mono text-slate-300">
-                    <div>Source: <span className="text-red-400 font-bold">${tileEvaluation.type}</span></div>
-                    <div>Tint: <span className="text-amber-400">${tileEvaluation.tint || "None"}</span></div>
+                    <div className="absolute inset-x-0 bottom-0 bg-slate-950/90 backdrop-blur-md p-3 border-t border-slate-800 text-xs space-y-1">
+                      <div className="flex items-center justify-between font-bold text-slate-100">
+                        <span className="text-red-400 truncate">${tileEvaluation.matchedName}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+                          ${tileEvaluation.type}
+                        </span>
+                      </div>
+                      <p className="text-[10px] font-mono text-slate-400 truncate">
+                        ${tileEvaluation.image}
+                      </p>
+                    </div>
                   </div>
                 </div>
+              </div>
 
-                <!-- Live Updates Log -->
-                <div className="bg-slate-950 rounded-lg p-3 border border-slate-800 font-mono text-xs space-y-2">
-                  <div className="text-slate-400 text-[11px] font-semibold flex items-center justify-between">
-                    <span>Hook Log Stream (updateActor -> evaluateTile)</span>
-                    <span className="text-emerald-400">Real-Time Sync Ready</span>
-                  </div>
-                  <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1">
-                    ${simulatedLog.map((log) => html`
-                      <div key=${log.id} className="text-[11px] flex items-center justify-between p-1.5 rounded bg-slate-900 border border-slate-800/80">
-                        <span className="text-slate-500">${log.time}</span>
-                        <span className="text-slate-300 font-sans">${log.matchedRule}</span>
-                        <span className="text-amber-400">${log.hungerState}</span>
-                      </div>
-                    `)}
-                  </div>
+              <!-- Matched Evaluation Details -->
+              <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-2 text-xs">
+                <div className="flex items-center justify-between text-slate-300 font-semibold border-b border-slate-800 pb-2">
+                  <span>Current Active Rule/Map Output:</span>
+                  <span className="text-amber-400 font-mono">${tileEvaluation.type}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400">
+                  <div>Active Image: <span className="text-slate-200 font-mono truncate block">${tileEvaluation.image}</span></div>
+                  <div>Tint Color: <span className="text-slate-200 font-mono">${tileEvaluation.tint || "None"}</span></div>
+                  <div>Alpha / Opacity: <span className="text-slate-200 font-mono">${tileEvaluation.alpha}</span></div>
+                  <div>Scale Multiplier: <span className="text-slate-200 font-mono">${tileEvaluation.scale}x</span></div>
                 </div>
               </div>
             </div>
@@ -701,102 +757,109 @@ function App() {
 
         ${activeTab === "statmap" && html`
           <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-xl space-y-6">
-            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+            <div className="border-b border-slate-800 pb-4 flex flex-wrap items-center justify-between gap-4">
               <div>
-                <h2 className="font-serif text-lg font-bold text-red-100 flex items-center gap-2">
-                  <${ImageIcon} className="w-5 h-5 text-amber-400" />
-                  Specific Images per Stat Level (Level Map)
+                <h2 className="font-serif text-lg font-bold text-amber-200 flex items-center gap-2">
+                  <i className="fas fa-image text-amber-400"></i>
+                  Specific Images Per Stat Level (Level Mapping)
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  Assign a unique image texture for each exact stat value (e.g. Hunger 0, 1, 2, 3, 4, 5). Includes 'Browse File' buttons to invoke native Foundry FilePicker!
+                  Assign a unique image path for every numerical value of a stat (e.g., Hunger 0, 1, 2, 3, 4, 5). Includes <strong>Browse File</strong> buttons for each row!
                 </p>
               </div>
 
-              <div className="flex items-center space-x-3">
-                <label className="text-xs font-semibold text-slate-300">Tracked Stat:</label>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-slate-300 font-semibold">Tracked Stat:</label>
                 <select
                   value=${statMapType}
                   onChange=${(e) => setStatMapType(e.target.value)}
-                  className="bg-slate-950 text-slate-200 border border-slate-700 rounded px-3 py-1.5 text-xs font-medium focus:border-red-500 outline-none"
+                  className="bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-xs text-slate-100 font-medium outline-none focus:border-red-500"
                 >
-                  <option value="hunger">Hunger / Rage / Desperation (0 to 5)</option>
-                  <option value="health_agg">Aggravated Health Damage (0 to 10)</option>
-                  <option value="health_sup">Superficial Health Damage (0 to 10)</option>
-                  <option value="health_total">Total Health Damage (0 to 10)</option>
+                  ${STAT_TYPES.map(s => html`
+                    <option key=${s.id} value=${s.id}>${s.label}</option>
+                  `)}
                 </select>
               </div>
             </div>
 
-            <!-- Pattern Auto-Fill Tool -->
+            <!-- Auto-Fill Pattern Helper -->
             <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3">
-              <div className="flex items-center space-x-2 text-xs text-slate-300 font-semibold">
-                <${Wand2} className="w-4 h-4 text-amber-400" />
-                <span>Level Path Auto-Fill Generator</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
+              <h3 className="text-xs font-bold text-slate-200 flex items-center gap-2">
+                <i className="fas fa-wand-magic-sparkles text-amber-400"></i>
+                Batch Auto-Fill Level Image Pattern
+              </h3>
+              <div className="flex items-center gap-2">
                 <input
                   type="text"
                   value=${autoFillPattern}
                   onChange=${(e) => setAutoFillPattern(e.target.value)}
-                  className="flex-1 min-w-[280px] bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-slate-200 focus:border-red-500 outline-none"
-                  placeholder="e.g. tiles/hunger_{level}.webp"
+                  placeholder="modules/wod5e-dynamic-tile-tracker/assets/hunger_{level}.webp"
+                  className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-slate-200 outline-none focus:border-amber-500"
                 />
                 <button
-                  onClick=${applyAutoFillPattern}
-                  className="px-4 py-1.5 bg-amber-700 hover:bg-amber-600 text-white font-semibold text-xs rounded border border-amber-500 transition flex items-center space-x-1.5"
+                  type="button"
+                  onClick=${handleAutoFillPattern}
+                  className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded border border-amber-400 flex items-center gap-1.5 transition"
                 >
-                  <${Zap} className="w-3.5 h-3.5" />
-                  <span>Auto-fill All Levels</span>
+                  <i className="fas fa-bolt"></i>
+                  <span>Auto-fill Levels</span>
                 </button>
               </div>
-              <p className="text-[11px] text-slate-400">
-                Use <code className="text-amber-300 font-mono">{level}</code> as a placeholder for the numerical level.
-              </p>
             </div>
 
-            <!-- Level Rows Grid -->
+            <!-- Level Entry Grid -->
             <div className="space-y-3">
-              ${[0, 1, 2, 3, 4, 5].map((lvl) => html`
-                <div key=${lvl} className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex flex-wrap items-center gap-3">
-                  <div className="w-24 text-xs font-bold text-slate-200 flex items-center space-x-2">
-                    <span className="w-6 h-6 rounded bg-red-950 text-red-300 border border-red-800 flex items-center justify-center font-mono">
-                      ${lvl}
-                    </span>
-                    <span>Level ${lvl}</span>
-                  </div>
+              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                Level Mapping Entries (0 to ${currentMaxLevel})
+              </h3>
 
-                  <div className="flex-1 flex items-center gap-2">
-                    <input
-                      type="text"
-                      value=${hungerLevelImages[String(lvl)] || ""}
-                      onChange=${(e) => {
-                        const val = e.target.value;
-                        setHungerLevelImages(prev => ({ ...prev, [String(lvl)]: val }));
-                      }}
-                      className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-slate-200 focus:border-red-500 outline-none"
-                      placeholder="Image texture path (e.g. tiles/vampire_hunger_2.webp)"
-                    />
-                    <button
-                      type="button"
-                      onClick=${() => alert(`In Foundry VTT, clicking 'Browse File' opens native FilePicker modal to select tile textures!`)}
-                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs rounded border border-slate-700 flex items-center gap-1.5 transition"
-                    >
-                      <${FolderOpen} className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Browse File</span>
-                    </button>
-                  </div>
-                </div>
-              `)}
+              <div className="grid grid-cols-1 gap-2">
+                ${Array.from({ length: currentMaxLevel + 1 }).map((_, level) => {
+                  const keyStr = String(level);
+                  const currentVal = hungerLevelImages[keyStr] || "";
+                  return html`
+                    <div key=${level} className="flex items-center gap-3 bg-slate-950 p-2.5 rounded-lg border border-slate-800/80 hover:border-slate-700">
+                      <div className="w-20 font-mono text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                        <span className="w-6 h-6 rounded bg-amber-950 text-amber-300 border border-amber-800 flex items-center justify-center text-[11px]">
+                          ${level}
+                        </span>
+                        <span>Level ${level}</span>
+                      </div>
+
+                      <input
+                        type="text"
+                        value=${currentVal}
+                        onChange=${(e) => {
+                          const val = e.target.value;
+                          setHungerLevelImages(prev => ({ ...prev, [keyStr]: val }));
+                        }}
+                        placeholder=${`Image path for level ${level}...`}
+                        className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-slate-200 outline-none focus:border-amber-500"
+                      />
+
+                      <!-- BROWSE FILE BUTTON -->
+                      <button
+                        type="button"
+                        onClick=${() => alert(`In Foundry VTT, opens FilePicker modal to select image for Level ${level}!`)}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded border border-slate-700 flex items-center gap-1.5 transition"
+                      >
+                        <i className="fas fa-folder-open text-amber-400"></i>
+                        <span>Browse File</span>
+                      </button>
+                    </div>
+                  `;
+                })}
+              </div>
             </div>
           </div>
         `}
 
         ${activeTab === "rules" && html`
           <div className="bg-slate-900 p-6 rounded-xl border border-slate-800 shadow-xl space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+            <div className="border-b border-slate-800 pb-4 flex items-center justify-between">
               <div>
-                <h2 className="font-serif text-lg font-bold text-red-100 flex items-center gap-2">
-                  <${Sliders} className="w-5 h-5 text-purple-400" />
+                <h2 className="font-serif text-lg font-bold text-purple-200 flex items-center gap-2">
+                  <i className="fas fa-sliders text-purple-400"></i>
                   Priority Condition Rules
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
@@ -838,13 +901,14 @@ function App() {
                           }}
                           className="flex-1 bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs font-mono text-slate-200 outline-none"
                         />
+                        <!-- BROWSE FILE BUTTON -->
                         <button
                           type="button"
                           onClick=${() => alert(`In Foundry VTT, opens native FilePicker for this rule!`)}
-                          className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 flex items-center gap-1"
+                          className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 flex items-center gap-1 transition"
                         >
-                          <${FolderOpen} className="w-3.5 h-3.5 text-amber-400" />
-                          <span>Browse</span>
+                          <i className="fas fa-folder-open text-amber-400"></i>
+                          <span>Browse File</span>
                         </button>
                       </div>
                     </div>
