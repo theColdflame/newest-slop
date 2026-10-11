@@ -1,0 +1,30 @@
+/* WoD5e Dynamic Tile Tracker Module Styles */
+
+.wod5e-tracker-tab {
+  padding: 8px;
+  background: rgba(15, 15, 20, 0.9);
+  border-radius: 6px;
+  color: #e2e8f0;
+}
+
+.wod5e-tracker-hud-btn {
+  background: rgba(139, 0, 0, 0.4);
+  border: 1px solid #dc2626;
+  border-radius: 4px;
+  padding: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+
+.wod5e-tracker-hud-btn:hover {
+  background: rgba(220, 38, 38, 0.8);
+  box-shadow: 0 0 10px rgba(220, 38, 38, 0.6);
+}
+
+.wod5e-rule-card {
+  background: #181820;
+  border-left: 4px solid #dc2626;
+  padding: 10px;
+  margin-bottom: 8px;
+  border-radius: 4px;
+}
