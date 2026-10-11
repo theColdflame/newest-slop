@@ -1,7 +1,7 @@
 /**
  * Injects WoD5e Dynamic Tile Tracker Settings Tab into Foundry VTT v14 Tile Config Sheet
- * Supports Direct Stat Level Mapping (e.g. setting individual images for Hunger 0..5 or Health 0..10)
- * as well as Priority Conditional Rules.
+ * Allows setting specific images per level of a stat (Hunger 0..5, Health Damage, Willpower)
+ * with FilePicker 'Browse File' buttons for all image path fields.
  */
 
 export class WoD5eTileConfigExtension {
@@ -28,19 +28,11 @@ export class WoD5eTileConfigExtension {
         statMap: {
           enabled: true,
           statType: "hunger",
-          levels: {
-            "0": "",
-            "1": "",
-            "2": "",
-            "3": "",
-            "4": "",
-            "5": ""
-          }
+          levels: { "0": "", "1": "", "2": "", "3": "", "4": "", "5": "" }
         },
         rules: []
       };
 
-      // Ensure statMap structure defaults
       if (!config.statMap) {
         config.statMap = {
           enabled: true,
@@ -49,7 +41,7 @@ export class WoD5eTileConfigExtension {
         };
       }
 
-      // 2. Locate navigation container using multiple fallback selectors
+      // Locate navigation bar
       const navEl = rootEl.querySelector('nav.sheet-tabs') ||
                     rootEl.querySelector('nav.tabs') ||
                     rootEl.querySelector('nav[data-group="primary"]') ||
@@ -61,14 +53,14 @@ export class WoD5eTileConfigExtension {
         return;
       }
 
-      // 3. Locate tab content body container
+      // Locate content body
       const bodyEl = rootEl.querySelector('section.sheet-body') ||
                      rootEl.querySelector('.sheet-body') ||
                      rootEl.querySelector('section.content') ||
                      rootEl.querySelector('form') ||
                      rootEl;
 
-      // 4. Create Tab Header Link
+      // Create Tab Navigation Button
       const tabNavBtn = document.createElement('a');
       tabNavBtn.className = 'item wod5e-tracker-tab-btn';
       tabNavBtn.setAttribute('data-tab', 'wod5e-tracker');
@@ -76,7 +68,7 @@ export class WoD5eTileConfigExtension {
       tabNavBtn.innerHTML = `<i class="fas fa-droplet" style="color: #e53e3e; margin-right: 5px;"></i> WoD5e Tracker`;
       navEl.appendChild(tabNavBtn);
 
-      // 5. Create Tab Content Panel
+      // Create Tab Content Panel
       const tabContent = document.createElement('div');
       tabContent.className = 'tab wod5e-tracker-tab-content';
       tabContent.setAttribute('data-tab', 'wod5e-tracker');
@@ -88,7 +80,8 @@ export class WoD5eTileConfigExtension {
         .map(a => `<option value="${a.id}" ${a.id === config.actorId ? "selected" : ""}>${a.name} (${a.type || "Actor"})</option>`)
         .join('');
 
-      // Build Tab Content HTML
+      const defaultImgVal = config.defaultImage || tileDoc.texture?.src || "";
+
       tabContent.innerHTML = `
         <div class="wod5e-tracker-config-wrapper" style="display: flex; flex-direction: column; gap: 14px;">
           
@@ -113,10 +106,10 @@ export class WoD5eTileConfigExtension {
 
             <div class="form-group" style="margin-bottom: 0;">
               <label style="font-weight: bold;"><i class="fas fa-image"></i> Default / Fallback Texture</label>
-              <div class="form-fields">
-                <input type="text" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="${config.defaultImage || tileDoc.texture?.src || ""}" placeholder="tiles/normal.png" style="flex: 1;"/>
-                <button type="button" class="file-picker" data-type="image" data-target="flags.wod5e-dynamic-tile-tracker.config.defaultImage" title="Browse Files">
-                  <i class="fas fa-file-picker"></i>
+              <div class="form-fields" style="display: flex; gap: 6px; align-items: center;">
+                <input type="text" id="wod5e-default-img-input" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="${this._escapeHtml(defaultImgVal)}" placeholder="tiles/normal.png" style="flex: 1;"/>
+                <button type="button" id="wod5e-default-img-browse" class="button wod5e-browse-btn" style="white-space: nowrap; padding: 2px 10px; height: 28px; display: flex; align-items: center; gap: 4px;" title="Browse Image File">
+                  <i class="fas fa-folder-open"></i> Browse File
                 </button>
               </div>
             </div>
@@ -142,7 +135,7 @@ export class WoD5eTileConfigExtension {
                   <option value="health_agg" ${config.statMap?.statType === "health_agg" ? "selected" : ""}>Aggravated Health Damage (0 to 10)</option>
                   <option value="health_sup" ${config.statMap?.statType === "health_sup" ? "selected" : ""}>Superficial Health Damage (0 to 10)</option>
                   <option value="health_total" ${config.statMap?.statType === "health_total" ? "selected" : ""}>Total Health Damage (0 to 10)</option>
-                  <option value="health_remaining" ${config.statMap?.statType === "health_remaining" ? "selected" : ""}>Remaining Health (0 to 10)</option>
+                  <option value="health_remaining" ${config.statMap?.statType === "health_remaining" ? "selected" : ""}>Remaining Health Points (0 to 10)</option>
                   <option value="willpower_agg" ${config.statMap?.statType === "willpower_agg" ? "selected" : ""}>Aggravated Willpower Damage (0 to 10)</option>
                   <option value="willpower_total" ${config.statMap?.statType === "willpower_total" ? "selected" : ""}>Total Willpower Damage (0 to 10)</option>
                 </select>
@@ -186,7 +179,12 @@ export class WoD5eTileConfigExtension {
 
       bodyEl.appendChild(tabContent);
 
-      // 6. Bind Tab Switching Behavior
+      // Bind Default Image Browse File button
+      const defaultImgInput = tabContent.querySelector('#wod5e-default-img-input');
+      const defaultImgBrowseBtn = tabContent.querySelector('#wod5e-default-img-browse');
+      this.bindFilePicker(defaultImgBrowseBtn, defaultImgInput);
+
+      // Bind Tab Switching Behavior
       const allTabBtns = navEl.querySelectorAll('.item');
       const allTabPanels = rootEl.querySelectorAll('.tab');
 
@@ -217,7 +215,7 @@ export class WoD5eTileConfigExtension {
         }
       });
 
-      // 7. Render Level Map Rows & Rule Logic
+      // Render Level Map Rows & Rule Logic
       this._setupStatMapGrid(tabContent, config.statMap || {});
       this._setupRulesEngine(tabContent, config.rules || []);
 
@@ -227,7 +225,46 @@ export class WoD5eTileConfigExtension {
   }
 
   /**
-   * Builds and manages the per-level stat image mapping matrix
+   * Helper to bind native Foundry VTT FilePicker or file browser fallback to any button and text input pair
+   */
+  static bindFilePicker(buttonEl, inputEl) {
+    if (!buttonEl || !inputEl) return;
+    buttonEl.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+
+      const currentPath = inputEl.value || "";
+
+      if (typeof FilePicker !== "undefined") {
+        const fp = new FilePicker({
+          type: "image",
+          current: currentPath,
+          callback: (path) => {
+            inputEl.value = path;
+            inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        });
+        fp.browse(currentPath);
+      } else {
+        // Fallback for non-Foundry browser testing
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.accept = "image/*";
+        fileInput.onchange = (e) => {
+          const file = e.target.files[0];
+          if (file) {
+            const fakePath = file.name ? `tiles/${file.name}` : URL.createObjectURL(file);
+            inputEl.value = fakePath;
+            inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        };
+        fileInput.click();
+      }
+    });
+  }
+
+  /**
+   * Builds and manages the per-level stat image mapping matrix with Browse File buttons
    */
   static _setupStatMapGrid(tabContent, initialStatMap) {
     const typeSelect = tabContent.querySelector('#wod5e-statmap-type');
@@ -251,7 +288,7 @@ export class WoD5eTileConfigExtension {
 
     const getMaxLevelsForType = (type) => {
       if (type === "hunger") return 5;
-      return 10; // Health / Willpower default 0..10
+      return 10;
     };
 
     const renderLevelRows = () => {
@@ -269,32 +306,41 @@ export class WoD5eTileConfigExtension {
           else if (i === 5) labelText = `Hunger 5 (Bestial / Starving)`;
           else labelText = `Hunger ${i}`;
         } else if (type === "health_agg") {
-          if (i === 0) labelText = `0 Aggravated Damage (Unscathed)`;
+          if (i === 0) labelText = `0 Aggravated Damage`;
           else labelText = `${i} Aggravated Damage`;
+        } else if (type === "health_sup") {
+          if (i === 0) labelText = `0 Superficial Damage`;
+          else labelText = `${i} Superficial Damage`;
         } else if (type === "health_remaining") {
-          if (i === 0) labelText = `0 HP Left (Incapacitated / Torpor)`;
+          if (i === 0) labelText = `0 HP Left (Torpor / Incap)`;
           else labelText = `${i} HP Remaining`;
         } else if (type === "health_total") {
           labelText = `${i} Total Damage`;
+        } else if (type.startsWith("willpower")) {
+          labelText = `Willpower ${i} Damage`;
         }
 
         const row = document.createElement('div');
-        row.style.cssText = "display: flex; gap: 6px; align-items: center; background: rgba(255,255,255,0.03); padding: 4px; border-radius: 4px;";
+        row.style.cssText = "display: flex; gap: 6px; align-items: center; background: rgba(255,255,255,0.03); padding: 4px 6px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);";
         row.innerHTML = `
           <span style="width: 150px; font-size: 0.82em; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${labelText}">
             ${labelText}
           </span>
           <input type="text" data-level="${i}" class="wod5e-level-img-input" value="${this._escapeHtml(existingImg)}" placeholder="Path to level ${i} image..." style="flex: 1; font-size: 0.85em;"/>
-          <button type="button" class="file-picker" data-type="image" data-target="level-${i}" title="Browse File">
-            <i class="fas fa-file-picker"></i>
+          <button type="button" class="button wod5e-level-browse-btn" style="white-space: nowrap; padding: 2px 8px; font-size: 0.82em; height: 26px; display: flex; align-items: center; gap: 4px;" title="Browse File">
+            <i class="fas fa-folder-open"></i> Browse
           </button>
         `;
 
         const input = row.querySelector('.wod5e-level-img-input');
+        const browseBtn = row.querySelector('.wod5e-level-browse-btn');
+
         input.addEventListener('change', (e) => {
           currentStatMap.levels[valStr] = e.target.value.trim();
           updateJson();
         });
+
+        this.bindFilePicker(browseBtn, input);
 
         gridContainer.appendChild(row);
       }
@@ -331,7 +377,7 @@ export class WoD5eTileConfigExtension {
   }
 
   /**
-   * Dynamic Rule Builder Engine
+   * Dynamic Rule Builder Engine with Browse File buttons
    */
   static _setupRulesEngine(tabContent, initialRules) {
     const container = tabContent.querySelector('#wod5e-rules-container');
@@ -387,9 +433,15 @@ export class WoD5eTileConfigExtension {
 
           <div style="display: flex; gap: 6px; align-items: center;">
             <input type="text" class="rule-img-src" value="${this._escapeHtml(rule.image || "")}" placeholder="Image path (e.g. tiles/blood.png)" style="flex: 1;"/>
+            <button type="button" class="button rule-browse-btn" style="white-space: nowrap; padding: 2px 8px; font-size: 0.82em; height: 26px; display: flex; align-items: center; gap: 4px;" title="Browse Image File">
+              <i class="fas fa-folder-open"></i> Browse
+            </button>
             <input type="color" class="rule-tint" value="${rule.tint || "#ffffff"}" title="Optional Tint Color"/>
           </div>
         `;
+
+        const imgInput = card.querySelector('.rule-img-src');
+        const browseBtn = card.querySelector('.rule-browse-btn');
 
         card.querySelector('.rule-enable-chk').addEventListener('change', (e) => {
           rules[idx].enabled = e.target.checked;
@@ -412,10 +464,12 @@ export class WoD5eTileConfigExtension {
           updateJson();
         });
 
-        card.querySelector('.rule-img-src').addEventListener('change', (e) => {
+        imgInput.addEventListener('change', (e) => {
           rules[idx].image = e.target.value.trim();
           updateJson();
         });
+
+        this.bindFilePicker(browseBtn, imgInput);
 
         card.querySelector('.rule-tint').addEventListener('change', (e) => {
           rules[idx].tint = e.target.value;

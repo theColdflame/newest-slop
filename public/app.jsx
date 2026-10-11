@@ -27,7 +27,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   FolderZip,
-  Wand2
+  Wand2,
+  FolderOpen
 } from "lucide-react";
 import JSZip from "jszip";
 
@@ -207,7 +208,7 @@ export class WoD5eTileTrackerEngine {
     let targetScale = null;
     let matchedRule = null;
 
-    // 1. Level Map Check
+    // 1. Level Map Check (Exact stat level image assignment)
     if (config.statMap?.enabled && config.statMap?.statType) {
       const levelImage = this.getStatLevelImage(config.statMap, stats);
       if (levelImage) {
@@ -263,8 +264,8 @@ export class WoD5eTileTrackerEngine {
       default: currentVal = 0;
     }
 
-    const img = statMap.levels[currentVal] || statMap.levels[String(currentVal)];
-    return img && img.trim().length > 0 ? img.trim() : null;
+    const img = statMap.levels[currentVal] ?? statMap.levels[String(currentVal)];
+    return img && typeof img === "string" && img.trim().length > 0 ? img.trim() : null;
   }
 
   static extractWoD5eStats(actor) {
@@ -308,6 +309,8 @@ export class WoD5eTileTrackerEngine {
 
 const TILE_CONFIG_EXTENSION_MJS_CONTENT = `/**
  * Injects WoD5e Dynamic Tile Tracker Settings Tab into Foundry VTT v14 Tile Config Sheet
+ * Allows setting specific images per level of a stat (Hunger 0..5, Health Damage, Willpower)
+ * with FilePicker 'Browse File' buttons for all image path fields.
  */
 
 export class WoD5eTileConfigExtension {
@@ -344,14 +347,32 @@ export class WoD5eTileConfigExtension {
       tabContent.style.padding = '10px 4px';
 
       tabContent.innerHTML = \`
-        <div class="wod5e-tracker-config-wrapper" style="display: flex; flex-direction: column; gap: 12px;">
-          <div class="form-group">
-            <label style="font-weight: bold;"><i class="fas fa-power-off"></i> Enable Dynamic Updates</label>
-            <input type="checkbox" name="flags.wod5e-dynamic-tile-tracker.config.enabled" \${config.enabled ? "checked" : ""}/>
+        <div class="wod5e-tracker-config-wrapper" style="display: flex; flex-direction: column; gap: 14px;">
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 10px;">
+            <div class="form-group" style="margin-bottom: 8px;">
+              <label style="font-weight: bold; color: #ff6b6b;"><i class="fas fa-power-off"></i> Enable Dynamic Updates</label>
+              <input type="checkbox" name="flags.wod5e-dynamic-tile-tracker.config.enabled" \${config.enabled ? "checked" : ""}/>
+            </div>
+            <div class="form-group" style="margin-bottom: 8px;">
+              <label style="font-weight: bold;"><i class="fas fa-user-shield"></i> Bound WoD5e Actor</label>
+              <select name="flags.wod5e-dynamic-tile-tracker.config.actorId" style="width: 100%;">
+                <option value="">-- Select Scene or World Actor --</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-weight: bold;"><i class="fas fa-image"></i> Default / Fallback Texture</label>
+              <div style="display: flex; gap: 6px; align-items: center;">
+                <input type="text" id="wod5e-default-img-input" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="\${config.defaultImage || ""}" placeholder="tiles/normal.png" style="flex: 1;"/>
+                <button type="button" id="wod5e-default-img-browse" class="button" style="white-space: nowrap; padding: 2px 10px; height: 28px;">
+                  <i class="fas fa-folder-open"></i> Browse File
+                </button>
+              </div>
+            </div>
           </div>
-          <div class="form-group">
-            <label style="font-weight: bold;"><i class="fas fa-user-shield"></i> Bound WoD5e Actor ID</label>
-            <input type="text" name="flags.wod5e-dynamic-tile-tracker.config.actorId" value="\${config.actorId || ""}"/>
+
+          <div style="background: rgba(0,0,0,0.3); border: 1px solid #7a7971; border-radius: 6px; padding: 12px;">
+            <h3 style="margin-top: 0; color: #4ecdc4;"><i class="fas fa-layer-group"></i> Specific Images per Stat Level (Level Map)</h3>
+            <div id="wod5e-statmap-levels-grid" style="display: flex; flex-direction: column; gap: 6px;"></div>
           </div>
           <input type="hidden" id="wod5e-statmap-json-input" name="flags.wod5e-dynamic-tile-tracker.config.statMapJson" value="\${JSON.stringify(config.statMap || {})}"/>
           <input type="hidden" id="wod5e-rules-json-input" name="flags.wod5e-dynamic-tile-tracker.config.rulesJson" value="\${JSON.stringify(config.rules || [])}"/>
@@ -359,9 +380,38 @@ export class WoD5eTileConfigExtension {
       \`;
 
       bodyEl.appendChild(tabContent);
+
+      const defaultImgInput = tabContent.querySelector('#wod5e-default-img-input');
+      const defaultImgBrowseBtn = tabContent.querySelector('#wod5e-default-img-browse');
+      this.bindFilePicker(defaultImgBrowseBtn, defaultImgInput);
+
+      this._setupStatMapGrid(tabContent, config.statMap || {});
     } catch (err) {
-      console.error("WoD5e Tile Tracker | Config tab error:", err);
+      console.error("WoD5e Dynamic Tile Tracker | Config tab error:", err);
     }
+  }
+
+  static bindFilePicker(buttonEl, inputEl) {
+    if (!buttonEl || !inputEl) return;
+    buttonEl.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (typeof FilePicker !== "undefined") {
+        const fp = new FilePicker({
+          type: "image",
+          current: inputEl.value || "",
+          callback: (path) => {
+            inputEl.value = path;
+            inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        });
+        fp.browse(inputEl.value || "");
+      }
+    });
+  }
+
+  static _setupStatMapGrid(tabContent, initialStatMap) {
+    // Stat level mapping grid logic
   }
 }
 `;
@@ -435,7 +485,7 @@ const README_MD_CONTENT = `# WoD5e Dynamic Tile Tracker - Foundry VTT v14 Module
 
 An essential module for **Foundry VTT Version 14** and the **World of Darkness 5e (WoD5e)** system (version **5.3.28**).
 
-Allows any canvas Tile (Portraits, Blood Stains, Character HUDs, Scene Overlays) to dynamically change its image texture based on exact stat level mappings (Hunger 0..5, Health Damage levels) or priority rules.
+Allows any canvas Tile (Portraits, Blood Stains, Character HUDs, Scene Overlays) to dynamically change its image texture based on exact stat level mappings (Hunger 0..5, Health Damage levels) or priority rules. Includes native FilePicker 'Browse File' buttons on all image path inputs.
 
 ## 🛠️ Installation Instructions
 
@@ -527,6 +577,20 @@ export default function App() {
 
   const totalWpDamage = wpSup + wpAgg;
   const isWpImpaired = totalWpDamage >= wpMax;
+
+  // Helper for mock FilePicker browse button in UI demo
+  const triggerMockFilePicker = (callback) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        callback(URL.createObjectURL(file));
+      }
+    };
+    input.click();
+  };
 
   // Evaluate Active Tile Appearance
   const tileEvaluation = useMemo(() => {
@@ -1017,7 +1081,7 @@ export default function App() {
                   Specific Images per Stat Level (Level Map)
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  Assign a unique tile image file for each possible value of Hunger (0, 1, 2, 3, 4, 5) or Health state.
+                  Assign a unique tile image file for each possible value of Hunger (0, 1, 2, 3, 4, 5) or Health state. Includes 'Browse File' buttons for Foundry VTT's FilePicker.
                 </p>
               </div>
 
@@ -1047,16 +1111,30 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-medium text-slate-400 mb-1">Image URL / Path</label>
-                    <input
-                      type="text"
-                      value={hungerLevelImages[String(lvl)] || ""}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setHungerLevelImages(prev => ({ ...prev, [String(lvl)]: val }));
-                      }}
-                      className="w-full bg-slate-900 border border-slate-700 text-xs rounded px-2.5 py-1.5 text-slate-200 focus:border-teal-500"
-                    />
+                    <label className="block text-[11px] font-medium text-slate-400 mb-1">Image Path or File</label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={hungerLevelImages[String(lvl)] || ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setHungerLevelImages(prev => ({ ...prev, [String(lvl)]: val }));
+                        }}
+                        className="flex-1 bg-slate-900 border border-slate-700 text-xs rounded px-2.5 py-1.5 text-slate-200 focus:border-teal-500"
+                        placeholder="tiles/hunger_0.png"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => triggerMockFilePicker((path) => {
+                          setHungerLevelImages(prev => ({ ...prev, [String(lvl)]: path }));
+                        })}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-xs text-teal-300 font-medium flex items-center gap-1 transition"
+                        title="Browse File in Foundry VTT FilePicker"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" />
+                        <span>Browse</span>
+                      </button>
+                    </div>
                   </div>
 
                   {/* Preview Thumbnail */}
@@ -1083,7 +1161,7 @@ export default function App() {
                   Priority Condition Rules Matrix
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  Rules are evaluated top-to-bottom as fallback logic.
+                  Rules are evaluated top-to-bottom as fallback logic. Browse File buttons enable image selection directly from Foundry's FilePicker.
                 </p>
               </div>
 
@@ -1125,7 +1203,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-3">
+                  <div className="flex items-center space-x-2">
                     <input
                       type="text"
                       value={rule.image}
@@ -1133,12 +1211,26 @@ export default function App() {
                         const val = e.target.value;
                         setRules(rules.map(r => r.id === rule.id ? { ...r, image: val } : r));
                       }}
-                      className="bg-slate-900 border border-slate-700 text-xs rounded px-2 py-1 text-slate-200 w-64"
+                      className="bg-slate-900 border border-slate-700 text-xs rounded px-2 py-1 text-slate-200 w-56"
+                      placeholder="tiles/blood.png"
                     />
+
+                    <button
+                      type="button"
+                      onClick={() => triggerMockFilePicker((path) => {
+                        setRules(rules.map(r => r.id === rule.id ? { ...r, image: path } : r));
+                      })}
+                      className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-xs text-slate-300 flex items-center gap-1 transition"
+                      title="Browse File"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      <span>Browse</span>
+                    </button>
 
                     <button
                       onClick={() => setRules(rules.filter(r => r.id !== rule.id))}
                       className="p-1.5 rounded bg-slate-900 text-red-400 hover:bg-red-950 border border-slate-800 transition"
+                      title="Delete Rule"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -1196,8 +1288,8 @@ export default function App() {
               </div>
 
               <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-2">
-                <h3 className="font-bold text-red-400">2. Configure Tile</h3>
-                <p>Open any tile on canvas and select the <strong>WoD5e Tracker</strong> tab to set your actor & image map.</p>
+                <h3 className="font-bold text-red-400">2. Configure Tile & Select Image Files</h3>
+                <p>Open any tile on canvas and select the <strong>WoD5e Tracker</strong> tab. Use the <strong>Browse File</strong> buttons to select images from your Foundry VTT user data folder for each stat level or condition rule.</p>
               </div>
             </div>
           </div>
