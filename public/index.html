@@ -42,13 +42,11 @@
       "react-dom": "https://esm.sh/react-dom@18.3.1",
       "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
       "lucide-react": "https://esm.sh/lucide-react@0.400.0?external=react,react-dom",
-      "jszip": "https://esm.sh/jszip@3.10.1"
+      "jszip": "https://esm.sh/jszip@3.10.1",
+      "htm": "https://esm.sh/htm@3.1.1"
     }
   }
   </script>
-
-  <!-- Babel Standalone -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <!-- Custom Styles for Foundry VTT Theme Simulation -->
   <style>
@@ -93,6 +91,6 @@
 </head>
 <body class="h-full font-sans antialiased bg-slate-950 text-slate-100 flex flex-col overflow-x-hidden">
   <div id="root" class="h-full flex flex-col"></div>
-  <script type="text/babel" data-type="module" data-presets="react" src="./app.jsx"></script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>
