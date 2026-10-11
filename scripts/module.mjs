@@ -49,10 +49,21 @@ Hooks.on("updateActor", (actor, changes, options, userId) => {
   }
 });
 
-// Pre-update hook to parse dynamic rule JSON before saving
+// Pre-update hook to parse dynamic level mapping and rules JSON before saving
 Hooks.on("preUpdateTile", (tileDoc, changes, options, userId) => {
   const config = changes.flags?.["wod5e-dynamic-tile-tracker"]?.config;
-  if (config && typeof config.rulesJson === "string") {
+  if (!config) return;
+
+  if (typeof config.statMapJson === "string") {
+    try {
+      config.statMap = JSON.parse(config.statMapJson);
+      delete config.statMapJson;
+    } catch (e) {
+      console.error("WoD5e Dynamic Tile Tracker | Error parsing statMapJson in preUpdateTile:", e);
+    }
+  }
+
+  if (typeof config.rulesJson === "string") {
     try {
       config.rules = JSON.parse(config.rulesJson);
       delete config.rulesJson;

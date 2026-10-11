@@ -1,5 +1,7 @@
 /**
  * Injects WoD5e Dynamic Tile Tracker Settings Tab into Foundry VTT v14 Tile Config Sheet
+ * Supports Direct Stat Level Mapping (e.g. setting individual images for Hunger 0..5 or Health 0..10)
+ * as well as Priority Conditional Rules.
  */
 
 export class WoD5eTileConfigExtension {
@@ -23,8 +25,29 @@ export class WoD5eTileConfigExtension {
         enabled: false,
         actorId: "",
         defaultImage: "",
+        statMap: {
+          enabled: true,
+          statType: "hunger",
+          levels: {
+            "0": "",
+            "1": "",
+            "2": "",
+            "3": "",
+            "4": "",
+            "5": ""
+          }
+        },
         rules: []
       };
+
+      // Ensure statMap structure defaults
+      if (!config.statMap) {
+        config.statMap = {
+          enabled: true,
+          statType: "hunger",
+          levels: { "0": "", "1": "", "2": "", "3": "", "4": "", "5": "" }
+        };
+      }
 
       // 2. Locate navigation container using multiple fallback selectors
       const navEl = rootEl.querySelector('nav.sheet-tabs') ||
@@ -67,52 +90,96 @@ export class WoD5eTileConfigExtension {
 
       // Build Tab Content HTML
       tabContent.innerHTML = `
-        <div class="wod5e-tracker-config-wrapper" style="display: flex; flex-direction: column; gap: 12px;">
-          <div class="form-group">
-            <label style="font-weight: bold;"><i class="fas fa-power-off"></i> Enable WoD5e Real-Time Dynamic Updates</label>
-            <div class="form-fields">
-              <input type="checkbox" name="flags.wod5e-dynamic-tile-tracker.config.enabled" ${config.enabled ? "checked" : ""}/>
+        <div class="wod5e-tracker-config-wrapper" style="display: flex; flex-direction: column; gap: 14px;">
+          
+          <!-- Toggle & Actor Selection -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 10px;">
+            <div class="form-group" style="margin-bottom: 8px;">
+              <label style="font-weight: bold; color: #ff6b6b;"><i class="fas fa-power-off"></i> Enable Dynamic Updates</label>
+              <div class="form-fields">
+                <input type="checkbox" name="flags.wod5e-dynamic-tile-tracker.config.enabled" ${config.enabled ? "checked" : ""}/>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 8px;">
+              <label style="font-weight: bold;"><i class="fas fa-user-shield"></i> Bound WoD5e Actor</label>
+              <div class="form-fields">
+                <select name="flags.wod5e-dynamic-tile-tracker.config.actorId" style="width: 100%;">
+                  <option value="">-- Select Scene or World Actor --</option>
+                  ${actorOptions}
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 0;">
+              <label style="font-weight: bold;"><i class="fas fa-image"></i> Default / Fallback Texture</label>
+              <div class="form-fields">
+                <input type="text" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="${config.defaultImage || tileDoc.texture?.src || ""}" placeholder="tiles/normal.png" style="flex: 1;"/>
+                <button type="button" class="file-picker" data-type="image" data-target="flags.wod5e-dynamic-tile-tracker.config.defaultImage" title="Browse Files">
+                  <i class="fas fa-file-picker"></i>
+                </button>
+              </div>
             </div>
           </div>
 
-          <div class="form-group">
-            <label style="font-weight: bold;"><i class="fas fa-user-shield"></i> Bound WoD5e Actor</label>
-            <div class="form-fields">
-              <select name="flags.wod5e-dynamic-tile-tracker.config.actorId" style="width: 100%;">
-                <option value="">-- Select Scene or World Actor --</option>
-                ${actorOptions}
-              </select>
-            </div>
-            <p class="notes">Select a Vampire, Werewolf, or Hunter character whose Health, Willpower, and Hunger/Rage trackers will update this tile in real time.</p>
-          </div>
+          <!-- SECTION 1: STAT LEVEL MAPPING GRID -->
+          <div style="background: rgba(0,0,0,0.3); border: 1px solid #7a7971; border-radius: 6px; padding: 12px;">
+            <h3 style="margin-top: 0; margin-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 4px; font-size: 1.1em; color: #4ecdc4; display: flex; align-items: center; justify-content: space-between;">
+              <span><i class="fas fa-layer-group"></i> Specific Images per Stat Level (Level Map)</span>
+              <label style="font-size: 0.85em; cursor: pointer; color: #fff;">
+                <input type="checkbox" id="wod5e-statmap-enable" ${config.statMap?.enabled ? "checked" : ""}/> Enable Level Mapping
+              </label>
+            </h3>
+            <p class="notes" style="margin-bottom: 10px; font-size: 0.85em; opacity: 0.85;">
+              Assign a distinct image file for each exact value/level of a stat (e.g. Hunger 0, Hunger 1, Hunger 2, Hunger 3, Hunger 4, Hunger 5).
+            </p>
 
-          <div class="form-group">
-            <label style="font-weight: bold;"><i class="fas fa-image"></i> Default / Fallback Tile Texture</label>
-            <div class="form-fields">
-              <input type="text" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="${config.defaultImage || tileDoc.texture?.src || ""}" placeholder="tiles/normal.png" style="flex: 1;"/>
-              <button type="button" class="file-picker" data-type="image" data-target="flags.wod5e-dynamic-tile-tracker.config.defaultImage" title="Browse Files">
-                <i class="fas fa-file-picker"></i>
+            <div class="form-group" style="margin-bottom: 10px;">
+              <label style="font-weight: bold;">Tracked Stat Type</label>
+              <div class="form-fields">
+                <select id="wod5e-statmap-type" style="width: 100%;">
+                  <option value="hunger" ${config.statMap?.statType === "hunger" ? "selected" : ""}>Hunger / Rage / Desperation (0 to 5)</option>
+                  <option value="health_agg" ${config.statMap?.statType === "health_agg" ? "selected" : ""}>Aggravated Health Damage (0 to 10)</option>
+                  <option value="health_sup" ${config.statMap?.statType === "health_sup" ? "selected" : ""}>Superficial Health Damage (0 to 10)</option>
+                  <option value="health_total" ${config.statMap?.statType === "health_total" ? "selected" : ""}>Total Health Damage (0 to 10)</option>
+                  <option value="health_remaining" ${config.statMap?.statType === "health_remaining" ? "selected" : ""}>Remaining Health (0 to 10)</option>
+                  <option value="willpower_agg" ${config.statMap?.statType === "willpower_agg" ? "selected" : ""}>Aggravated Willpower Damage (0 to 10)</option>
+                  <option value="willpower_total" ${config.statMap?.statType === "willpower_total" ? "selected" : ""}>Total Willpower Damage (0 to 10)</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Auto-fill pattern helper -->
+            <div style="display: flex; gap: 6px; margin-bottom: 10px; align-items: center; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 4px;">
+              <input type="text" id="wod5e-autofill-pattern" placeholder="e.g. tiles/hunger_{level}.webp" style="flex: 1; font-size: 0.85em;" title="Use {level} placeholder to auto fill image paths for levels 0 to N"/>
+              <button type="button" id="wod5e-autofill-btn" class="button" style="padding: 2px 10px; font-size: 0.85em; white-space: nowrap;">
+                <i class="fas fa-wand-magic-sparkles"></i> Auto-fill Levels
               </button>
             </div>
+
+            <!-- Level inputs container -->
+            <div id="wod5e-statmap-levels-grid" style="display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow-y: auto; padding-right: 4px;">
+              <!-- Dynamic rows rendered by JS -->
+            </div>
           </div>
 
-          <hr style="margin: 8px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);"/>
-
-          <div>
-            <h3 style="margin-bottom: 8px; border-bottom: 1px solid #7a7971; padding-bottom: 4px; font-size: 1.1em; display: flex; justify-content: space-between; align-items: center;">
-              <span><i class="fas fa-list-check"></i> Tracker Dynamic Priority Rules</span>
+          <!-- SECTION 2: PRIORITY CONDITIONAL RULES -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 12px;">
+            <h3 style="margin-top: 0; margin-bottom: 8px; border-bottom: 1px solid #7a7971; padding-bottom: 4px; font-size: 1.1em; display: flex; justify-content: space-between; align-items: center;">
+              <span><i class="fas fa-list-check"></i> Conditional Priority Rules (Fallback / Overrides)</span>
               <button type="button" id="wod5e-add-rule-btn" class="button" style="padding: 2px 8px; font-size: 0.85em; width: auto;">
                 <i class="fas fa-plus"></i> Add Rule
               </button>
             </h3>
-            <p class="notes" style="margin-bottom: 10px;">Rules are evaluated top-to-bottom. The first matching rule applies its texture, tint, and scale to the tile.</p>
+            <p class="notes" style="margin-bottom: 10px; font-size: 0.85em;">Evaluated if no Level Map image matches. First matching rule wins.</p>
             
             <div id="wod5e-rules-container" style="display: flex; flex-direction: column; gap: 8px;">
               <!-- Rules injected dynamically -->
             </div>
           </div>
 
-          <!-- Hidden input holding rules JSON data -->
+          <!-- Hidden JSON storage inputs for submission -->
+          <input type="hidden" id="wod5e-statmap-json-input" name="flags.wod5e-dynamic-tile-tracker.config.statMapJson" value="${this._escapeHtml(JSON.stringify(config.statMap || {}))}"/>
           <input type="hidden" id="wod5e-rules-json-input" name="flags.wod5e-dynamic-tile-tracker.config.rulesJson" value="${this._escapeHtml(JSON.stringify(config.rules || []))}"/>
         </div>
       `;
@@ -140,7 +207,6 @@ export class WoD5eTileConfigExtension {
         activateWodTab();
       });
 
-      // When clicking other tab buttons, hide WoD5e tracker tab panel
       allTabBtns.forEach(btn => {
         if (btn !== tabNavBtn) {
           btn.addEventListener('click', () => {
@@ -151,225 +217,239 @@ export class WoD5eTileConfigExtension {
         }
       });
 
-      // 7. Initialize Rules Table & Handlers
-      this._initRuleEditor(tabContent, config.rules || []);
-
-      // FilePicker click handler binding
-      tabContent.querySelectorAll('.file-picker').forEach(fpBtn => {
-        fpBtn.addEventListener('click', (ev) => {
-          ev.preventDefault();
-          const targetName = fpBtn.getAttribute('data-target');
-          const targetInput = rootEl.querySelector(`input[name="${targetName}"]`);
-          if (targetInput && typeof FilePicker !== "undefined") {
-            new FilePicker({
-              type: "image",
-              current: targetInput.value,
-              callback: path => { targetInput.value = path; }
-            }).render(true);
-          }
-        });
-      });
+      // 7. Render Level Map Rows & Rule Logic
+      this._setupStatMapGrid(tabContent, config.statMap || {});
+      this._setupRulesEngine(tabContent, config.rules || []);
 
     } catch (err) {
-      console.error("WoD5e Dynamic Tile Tracker | Error rendering tile config tab:", err);
+      console.error("WoD5e Dynamic Tile Tracker | Exception attaching configuration tab:", err);
     }
   }
 
-  static _initRuleEditor(tabContent, initialRules) {
-    let rules = [...initialRules];
-    const rulesContainer = tabContent.querySelector('#wod5e-rules-container');
-    const hiddenInput = tabContent.querySelector('#wod5e-rules-json-input');
-    const addBtn = tabContent.querySelector('#wod5e-add-rule-btn');
+  /**
+   * Builds and manages the per-level stat image mapping matrix
+   */
+  static _setupStatMapGrid(tabContent, initialStatMap) {
+    const typeSelect = tabContent.querySelector('#wod5e-statmap-type');
+    const enableCheckbox = tabContent.querySelector('#wod5e-statmap-enable');
+    const gridContainer = tabContent.querySelector('#wod5e-statmap-levels-grid');
+    const autoFillBtn = tabContent.querySelector('#wod5e-autofill-btn');
+    const autoFillInput = tabContent.querySelector('#wod5e-autofill-pattern');
+    const jsonInput = tabContent.querySelector('#wod5e-statmap-json-input');
 
-    const updateJSON = () => {
-      if (hiddenInput) {
-        hiddenInput.value = JSON.stringify(rules);
+    let currentStatMap = {
+      enabled: initialStatMap.enabled ?? true,
+      statType: initialStatMap.statType || "hunger",
+      levels: { ...(initialStatMap.levels || {}) }
+    };
+
+    const updateJson = () => {
+      currentStatMap.enabled = enableCheckbox.checked;
+      currentStatMap.statType = typeSelect.value;
+      jsonInput.value = JSON.stringify(currentStatMap);
+    };
+
+    const getMaxLevelsForType = (type) => {
+      if (type === "hunger") return 5;
+      return 10; // Health / Willpower default 0..10
+    };
+
+    const renderLevelRows = () => {
+      const type = typeSelect.value;
+      const maxLvl = getMaxLevelsForType(type);
+      gridContainer.innerHTML = "";
+
+      for (let i = 0; i <= maxLvl; i++) {
+        const valStr = String(i);
+        const existingImg = currentStatMap.levels[valStr] || "";
+
+        let labelText = `Level ${i}`;
+        if (type === "hunger") {
+          if (i === 0) labelText = `Hunger 0 (Satisfied)`;
+          else if (i === 5) labelText = `Hunger 5 (Bestial / Starving)`;
+          else labelText = `Hunger ${i}`;
+        } else if (type === "health_agg") {
+          if (i === 0) labelText = `0 Aggravated Damage (Unscathed)`;
+          else labelText = `${i} Aggravated Damage`;
+        } else if (type === "health_remaining") {
+          if (i === 0) labelText = `0 HP Left (Incapacitated / Torpor)`;
+          else labelText = `${i} HP Remaining`;
+        } else if (type === "health_total") {
+          labelText = `${i} Total Damage`;
+        }
+
+        const row = document.createElement('div');
+        row.style.cssText = "display: flex; gap: 6px; align-items: center; background: rgba(255,255,255,0.03); padding: 4px; border-radius: 4px;";
+        row.innerHTML = `
+          <span style="width: 150px; font-size: 0.82em; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${labelText}">
+            ${labelText}
+          </span>
+          <input type="text" data-level="${i}" class="wod5e-level-img-input" value="${this._escapeHtml(existingImg)}" placeholder="Path to level ${i} image..." style="flex: 1; font-size: 0.85em;"/>
+          <button type="button" class="file-picker" data-type="image" data-target="level-${i}" title="Browse File">
+            <i class="fas fa-file-picker"></i>
+          </button>
+        `;
+
+        const input = row.querySelector('.wod5e-level-img-input');
+        input.addEventListener('change', (e) => {
+          currentStatMap.levels[valStr] = e.target.value.trim();
+          updateJson();
+        });
+
+        gridContainer.appendChild(row);
       }
+    };
+
+    typeSelect.addEventListener('change', () => {
+      currentStatMap.statType = typeSelect.value;
+      renderLevelRows();
+      updateJson();
+    });
+
+    enableCheckbox.addEventListener('change', () => {
+      updateJson();
+    });
+
+    autoFillBtn.addEventListener('click', () => {
+      const pattern = autoFillInput.value.trim();
+      if (!pattern) return;
+
+      const type = typeSelect.value;
+      const maxLvl = getMaxLevelsForType(type);
+
+      for (let i = 0; i <= maxLvl; i++) {
+        const path = pattern.replace(/\{level\}/g, i).replace(/\{lvl\}/g, i);
+        currentStatMap.levels[String(i)] = path;
+      }
+
+      renderLevelRows();
+      updateJson();
+    });
+
+    renderLevelRows();
+    updateJson();
+  }
+
+  /**
+   * Dynamic Rule Builder Engine
+   */
+  static _setupRulesEngine(tabContent, initialRules) {
+    const container = tabContent.querySelector('#wod5e-rules-container');
+    const addBtn = tabContent.querySelector('#wod5e-add-rule-btn');
+    const jsonInput = tabContent.querySelector('#wod5e-rules-json-input');
+
+    let rules = [...initialRules];
+
+    const updateJson = () => {
+      jsonInput.value = JSON.stringify(rules);
     };
 
     const renderRules = () => {
-      if (!rulesContainer) return;
+      container.innerHTML = "";
       if (rules.length === 0) {
-        rulesContainer.innerHTML = `
-          <div style="padding: 12px; text-align: center; color: #888; background: rgba(0,0,0,0.15); border-radius: 4px; font-style: italic;">
-            No rules configured. Click "Add Rule" to define dynamic tile textures based on Health, Willpower, or Hunger.
-          </div>
-        `;
-        updateJSON();
+        container.innerHTML = `<div style="text-align: center; color: #888; font-style: italic; padding: 10px; font-size: 0.85em;">No conditional rules added. Click "Add Rule" above.</div>`;
         return;
       }
 
-      rulesContainer.innerHTML = rules.map((rule, index) => `
-        <div class="wod5e-rule-card" data-index="${index}" style="background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 6px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 4px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" class="rule-enable-check" data-index="${index}" ${rule.enabled !== false ? "checked" : ""} title="Enable/Disable Rule"/>
-              <strong style="color: #ff6b6b;">Rule #${index + 1}</strong>
-            </div>
-            <div style="display: flex; gap: 4px;">
-              ${index > 0 ? `<button type="button" class="rule-move-up" data-index="${index}" title="Move Up" style="padding: 1px 5px;"><i class="fas fa-arrow-up"></i></button>` : ''}
-              ${index < rules.length - 1 ? `<button type="button" class="rule-move-down" data-index="${index}" title="Move Down" style="padding: 1px 5px;"><i class="fas fa-arrow-down"></i></button>` : ''}
-              <button type="button" class="rule-delete-btn" data-index="${index}" title="Delete Rule" style="padding: 1px 5px; color: #e53e3e;"><i class="fas fa-trash"></i></button>
+      rules.forEach((rule, idx) => {
+        const card = document.createElement('div');
+        card.className = 'wod5e-rule-card';
+        card.style.cssText = "background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 8px; font-size: 0.85em;";
+
+        card.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-weight: bold; color: #ff6b6b;"><i class="fas fa-hashtag"></i> Rule #${idx + 1}</span>
+            <div>
+              <input type="checkbox" class="rule-enable-chk" ${rule.enabled ? "checked" : ""} title="Enable/Disable Rule"/>
+              <button type="button" class="rule-delete-btn button" style="padding: 1px 6px; margin-left: 6px;" title="Delete Rule">
+                <i class="fas fa-trash" style="color: #e53e3e;"></i>
+              </button>
             </div>
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Condition Type</label>
-              <select class="rule-cond-type" data-index="${index}" style="width: 100%; font-size: 0.85em;">
-                <option value="health_torpor" ${rule.conditionType === "health_torpor" ? "selected" : ""}>Health: In Torpor</option>
-                <option value="health_impaired" ${rule.conditionType === "health_impaired" ? "selected" : ""}>Health: Impaired (Full Damage)</option>
-                <option value="health_aggravated" ${rule.conditionType === "health_aggravated" ? "selected" : ""}>Health: Aggravated Damage >=</option>
-                <option value="health_superficial" ${rule.conditionType === "health_superficial" ? "selected" : ""}>Health: Superficial Damage >=</option>
-                <option value="health_percent_below" ${rule.conditionType === "health_percent_below" ? "selected" : ""}>Health: % Below or Equal <=</option>
-                <option value="willpower_impaired" ${rule.conditionType === "willpower_impaired" ? "selected" : ""}>Willpower: Impaired</option>
-                <option value="willpower_aggravated" ${rule.conditionType === "willpower_aggravated" ? "selected" : ""}>Willpower: Aggravated Damage >=</option>
-                <option value="hunger_gte" ${rule.conditionType === "hunger_gte" ? "selected" : ""}>Hunger / Rage / Desperation >=</option>
-                <option value="hunger_equals" ${rule.conditionType === "hunger_equals" ? "selected" : ""}>Hunger / Rage / Desperation ==</option>
-              </select>
-            </div>
+          <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+            <select class="rule-cond-type" style="flex: 2;">
+              <option value="hunger_equals" ${rule.conditionType === "hunger_equals" ? "selected" : ""}>Hunger Exact Match (=)</option>
+              <option value="hunger_gte" ${rule.conditionType === "hunger_gte" ? "selected" : ""}>Hunger Greater Than or Equal (>=)</option>
+              <option value="health_agg_equals" ${rule.conditionType === "health_agg_equals" ? "selected" : ""}>Aggravated Health Exact Match (=)</option>
+              <option value="health_aggravated" ${rule.conditionType === "health_aggravated" ? "selected" : ""}>Aggravated Health Damage (>=)</option>
+              <option value="health_sup_equals" ${rule.conditionType === "health_sup_equals" ? "selected" : ""}>Superficial Health Exact Match (=)</option>
+              <option value="health_superficial" ${rule.conditionType === "health_superficial" ? "selected" : ""}>Superficial Health Damage (>=)</option>
+              <option value="health_total_equals" ${rule.conditionType === "health_total_equals" ? "selected" : ""}>Total Health Damage Exact (=)</option>
+              <option value="health_percent_below" ${rule.conditionType === "health_percent_below" ? "selected" : ""}>Health Percent Below (<= %)</option>
+              <option value="health_torpor" ${rule.conditionType === "health_torpor" ? "selected" : ""}>Incapacitated / Torpor State</option>
+              <option value="willpower_agg_equals" ${rule.conditionType === "willpower_agg_equals" ? "selected" : ""}>Aggravated Willpower Exact (=)</option>
+              <option value="willpower_aggravated" ${rule.conditionType === "willpower_aggravated" ? "selected" : ""}>Aggravated Willpower Damage (>=)</option>
+            </select>
 
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Condition Value</label>
-              <input type="number" class="rule-cond-val" data-index="${index}" value="${rule.value ?? 1}" min="0" max="100" style="width: 100%; font-size: 0.85em;"/>
-            </div>
+            <input type="number" class="rule-cond-val" value="${rule.value ?? 1}" min="0" max="100" style="width: 60px;" placeholder="Value"/>
           </div>
 
-          <div>
-            <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Image / Texture Path</label>
-            <div style="display: flex; gap: 4px;">
-              <input type="text" class="rule-image-path" data-index="${index}" value="${rule.image || ""}" placeholder="tiles/injured.png" style="flex: 1; font-size: 0.85em;"/>
-            </div>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <input type="text" class="rule-img-src" value="${this._escapeHtml(rule.image || "")}" placeholder="Image path (e.g. tiles/blood.png)" style="flex: 1;"/>
+            <input type="color" class="rule-tint" value="${rule.tint || "#ffffff"}" title="Optional Tint Color"/>
           </div>
+        `;
 
-          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;">
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Tint Hex</label>
-              <input type="color" class="rule-tint-color" data-index="${index}" value="${rule.tint || "#ffffff"}" style="width: 100%; height: 24px; padding: 0; cursor: pointer;"/>
-            </div>
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Opacity (Alpha)</label>
-              <input type="number" class="rule-alpha-val" data-index="${index}" value="${rule.alpha ?? 1.0}" min="0" max="1" step="0.1" style="width: 100%; font-size: 0.85em;"/>
-            </div>
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Scale Multiplier</label>
-              <input type="number" class="rule-scale-val" data-index="${index}" value="${rule.scale ?? 1.0}" min="0.1" max="5" step="0.1" style="width: 100%; font-size: 0.85em;"/>
-            </div>
-          </div>
-        </div>
-      `).join('');
-
-      // Attach rule editing event listeners
-      rulesContainer.querySelectorAll('.rule-enable-check').forEach(chk => {
-        chk.addEventListener('change', (e) => {
-          rules[Number(e.target.dataset.index)].enabled = e.target.checked;
-          updateJSON();
+        card.querySelector('.rule-enable-chk').addEventListener('change', (e) => {
+          rules[idx].enabled = e.target.checked;
+          updateJson();
         });
-      });
 
-      rulesContainer.querySelectorAll('.rule-cond-type').forEach(sel => {
-        sel.addEventListener('change', (e) => {
-          rules[Number(e.target.dataset.index)].conditionType = e.target.value;
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-cond-val').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].value = Number(e.target.value);
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-image-path').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].image = e.target.value;
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-tint-color').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].tint = e.target.value;
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-alpha-val').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].alpha = Number(e.target.value);
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-scale-val').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].scale = Number(e.target.value);
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-delete-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          const idx = Number(btn.dataset.index);
+        card.querySelector('.rule-delete-btn').addEventListener('click', () => {
           rules.splice(idx, 1);
           renderRules();
+          updateJson();
         });
-      });
 
-      rulesContainer.querySelectorAll('.rule-move-up').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          const idx = Number(btn.dataset.index);
-          if (idx > 0) {
-            const temp = rules[idx];
-            rules[idx] = rules[idx - 1];
-            rules[idx - 1] = temp;
-            renderRules();
-          }
+        card.querySelector('.rule-cond-type').addEventListener('change', (e) => {
+          rules[idx].conditionType = e.target.value;
+          updateJson();
         });
-      });
 
-      rulesContainer.querySelectorAll('.rule-move-down').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          const idx = Number(btn.dataset.index);
-          if (idx < rules.length - 1) {
-            const temp = rules[idx];
-            rules[idx] = rules[idx + 1];
-            rules[idx + 1] = temp;
-            renderRules();
-          }
+        card.querySelector('.rule-cond-val').addEventListener('change', (e) => {
+          rules[idx].value = Number(e.target.value);
+          updateJson();
         });
-      });
 
-      updateJSON();
+        card.querySelector('.rule-img-src').addEventListener('change', (e) => {
+          rules[idx].image = e.target.value.trim();
+          updateJson();
+        });
+
+        card.querySelector('.rule-tint').addEventListener('change', (e) => {
+          rules[idx].tint = e.target.value;
+          updateJson();
+        });
+
+        container.appendChild(card);
+      });
     };
 
-    if (addBtn) {
-      addBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        rules.push({
-          id: `rule-${Date.now()}`,
-          conditionType: "hunger_gte",
-          value: 4,
-          image: "",
-          tint: "#ff0000",
-          alpha: 1.0,
-          scale: 1.0,
-          enabled: true
-        });
-        renderRules();
+    addBtn.addEventListener('click', () => {
+      rules.push({
+        enabled: true,
+        conditionType: "hunger_equals",
+        value: 1,
+        image: "",
+        tint: "#ffffff",
+        alpha: 1.0,
+        scale: 1.0
       });
-    }
+      renderRules();
+      updateJson();
+    });
 
     renderRules();
+    updateJson();
   }
 
   static _escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+    return String(str || '')
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 }

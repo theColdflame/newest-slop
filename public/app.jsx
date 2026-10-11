@@ -25,7 +25,9 @@ import {
   Zap, 
   Info,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  FolderZip,
+  Wand2
 } from "lucide-react";
 import JSZip from "jszip";
 
@@ -73,7 +75,7 @@ const MODULE_JSON_CONTENT = `{
   ],
   "url": "https://github.com/foundryvtt/wod5e-dynamic-tile-tracker",
   "manifest": "https://raw.githubusercontent.com/foundryvtt/wod5e-dynamic-tile-tracker/main/module.json",
-  "download": "https://github.com/foundryvtt/wod5e-dynamic-tile-tracker/releases/download/v1.0.0/module.zip"
+  "download": "https://github.com/foundryvtt/wod5e-dynamic-tile-tracker/releases/download/v1.0.0/wod5e-dynamic-tile-tracker-v14.zip"
 }`;
 
 const MODULE_MJS_CONTENT = `/**
@@ -88,7 +90,6 @@ import { WoD5eTileHUDExtension } from "./tile-hud-extension.mjs";
 Hooks.once("init", () => {
   console.log("WoD5e Dynamic Tile Tracker | Initializing module for Foundry VTT v14 & WoD5e 5.3.28");
 
-  // Register Module Settings
   game.settings.register("wod5e-dynamic-tile-tracker", "enableDebug", {
     name: game.i18n.localize("WOD5E_TILE.SettingsEnableDebug") || "Enable Debug Logging",
     hint: game.i18n.localize("WOD5E_TILE.SettingsEnableDebugHint") || "Logs dynamic tile evaluation decisions to developer console.",
@@ -113,7 +114,6 @@ Hooks.once("ready", () => {
   WoD5eTileTrackerEngine.init();
 });
 
-// Reactivity Hooks for Real-Time Actor Tracker Updates
 Hooks.on("updateActor", (actor, changes, options, userId) => {
   const sys = changes.system;
   if (!sys) return;
@@ -127,10 +127,20 @@ Hooks.on("updateActor", (actor, changes, options, userId) => {
   }
 });
 
-// Pre-update hook to parse dynamic rule JSON before saving
 Hooks.on("preUpdateTile", (tileDoc, changes, options, userId) => {
   const config = changes.flags?.["wod5e-dynamic-tile-tracker"]?.config;
-  if (config && typeof config.rulesJson === "string") {
+  if (!config) return;
+
+  if (typeof config.statMapJson === "string") {
+    try {
+      config.statMap = JSON.parse(config.statMapJson);
+      delete config.statMapJson;
+    } catch (e) {
+      console.error("WoD5e Dynamic Tile Tracker | Error parsing statMapJson in preUpdateTile:", e);
+    }
+  }
+
+  if (typeof config.rulesJson === "string") {
     try {
       config.rules = JSON.parse(config.rulesJson);
       delete config.rulesJson;
@@ -140,7 +150,6 @@ Hooks.on("preUpdateTile", (tileDoc, changes, options, userId) => {
   }
 });
 
-// Re-eval Tile when Tile Document is Updated or Created
 Hooks.on("updateTile", (tileDoc, changes, options, userId) => {
   const flags = changes.flags?.["wod5e-dynamic-tile-tracker"];
   if (flags) {
@@ -148,12 +157,10 @@ Hooks.on("updateTile", (tileDoc, changes, options, userId) => {
   }
 });
 
-// Inject Custom Configuration Tab into Tile Config Sheet
 Hooks.on("renderTileConfig", (app, html, data) => {
   WoD5eTileConfigExtension.attachTab(app, html, data);
 });
 
-// Add HUD Action Button to Canvas Tile HUD
 Hooks.on("renderTileHUD", (app, html, data) => {
   WoD5eTileHUDExtension.attachButton(app, html, data);
 });
@@ -170,13 +177,8 @@ export class WoD5eTileTrackerEngine {
     this._debouncedUpdates = new Map();
   }
 
-  /**
-   * Main listener when actor tracker values (Health, Willpower, Hunger) change
-   */
   static onActorTrackerUpdated(actor) {
     if (!actor) return;
-
-    // Find all tiles in current active scene (or across scenes) bound to this actor
     const scene = canvas.scene;
     if (!scene) return;
 
@@ -190,9 +192,6 @@ export class WoD5eTileTrackerEngine {
     }
   }
 
-  /**
-   * Evaluates rules against actor state and updates tile texture / appearance
-   */
   static async evaluateTile(tileDoc, actorOverride = null) {
     const config = tileDoc.getFlag(this.MODULE_ID, "config");
     if (!config || !config.enabled) return;
@@ -200,57 +199,76 @@ export class WoD5eTileTrackerEngine {
     const actor = actorOverride || game.actors.get(config.actorId);
     if (!actor) return;
 
-    // Compute WoD5e Actor Tracker Stats (5.3.28 Data Structure)
     const stats = this.extractWoD5eStats(actor);
 
-    // Default target image is base texture or configured fallback
+    let targetSrc = null;
+    let targetTint = null;
+    let targetAlpha = null;
+    let targetScale = null;
     let matchedRule = null;
-    const rules = config.rules || [];
 
-    // Evaluate rules in order of priority (first matching rule wins)
-    for (const rule of rules) {
-      if (this.checkRuleMatch(rule, stats)) {
-        matchedRule = rule;
-        break;
+    // 1. Level Map Check
+    if (config.statMap?.enabled && config.statMap?.statType) {
+      const levelImage = this.getStatLevelImage(config.statMap, stats);
+      if (levelImage) {
+        targetSrc = levelImage;
       }
     }
 
-    // Determine target properties
-    const targetSrc = matchedRule?.image || config.defaultImage || tileDoc.texture.src;
-    const targetTint = matchedRule?.tint || config.defaultTint || null;
-    const targetAlpha = matchedRule?.alpha ?? config.defaultAlpha ?? 1.0;
-    const targetScale = matchedRule?.scale ?? config.defaultScale ?? 1.0;
+    // 2. Rules Priority Check
+    if (!targetSrc && config.rules && config.rules.length > 0) {
+      for (const rule of config.rules) {
+        if (this.checkRuleMatch(rule, stats)) {
+          matchedRule = rule;
+          targetSrc = rule.image;
+          targetTint = rule.tint || null;
+          targetAlpha = rule.alpha ?? null;
+          targetScale = rule.scale ?? null;
+          break;
+        }
+      }
+    }
 
-    // Prepare update payload for Foundry VTT v14 Tile Document
+    if (!targetSrc) {
+      targetSrc = config.defaultImage || tileDoc.texture.src;
+    }
+
+    targetTint = targetTint || config.defaultTint || null;
+    targetAlpha = targetAlpha ?? config.defaultAlpha ?? 1.0;
+    targetScale = targetScale ?? config.defaultScale ?? 1.0;
+
     const updates = {
-      texture: {
-        src: targetSrc,
-        tint: targetTint
-      },
+      texture: { src: targetSrc, tint: targetTint },
       alpha: targetAlpha,
       scaleX: targetScale,
       scaleY: targetScale
     };
 
-    // Apply smooth tile update if texture or parameters changed
-    const currentSrc = tileDoc.texture.src;
-    const currentTint = tileDoc.texture.tint;
-
-    if (currentSrc !== targetSrc || currentTint !== targetTint || tileDoc.alpha !== targetAlpha) {
-      if (game.settings.get(this.MODULE_ID, "enableDebug")) {
-        console.log(\`WoD5e Tile Tracker | Updating Tile \${tileDoc.id} for Actor \${actor.name}:\`, updates, matchedRule);
-      }
+    if (tileDoc.texture.src !== targetSrc || tileDoc.texture.tint !== targetTint || tileDoc.alpha !== targetAlpha) {
       await tileDoc.update(updates);
     }
   }
 
-  /**
-   * Extract Health, Willpower, Hunger, Rage trackers according to WoD5e 5.3.28 system schema
-   */
+  static getStatLevelImage(statMap, stats) {
+    if (!statMap || !statMap.levels) return null;
+    let currentVal = 0;
+    switch (statMap.statType) {
+      case "hunger": currentVal = stats.hungerVal; break;
+      case "health_agg": currentVal = stats.healthAgg; break;
+      case "health_sup": currentVal = stats.healthSup; break;
+      case "health_total": currentVal = stats.totalHealthDamage; break;
+      case "health_remaining": currentVal = Math.max(0, stats.healthMax - stats.totalHealthDamage); break;
+      case "willpower_agg": currentVal = stats.wpAgg; break;
+      case "willpower_total": currentVal = stats.totalWpDamage; break;
+      default: currentVal = 0;
+    }
+
+    const img = statMap.levels[currentVal] || statMap.levels[String(currentVal)];
+    return img && img.trim().length > 0 ? img.trim() : null;
+  }
+
   static extractWoD5eStats(actor) {
     const sys = actor.system || {};
-
-    // Health Tracker (Aggravated, Superficial, Max)
     const health = sys.health || { max: 6, aggravated: 0, superficial: 0 };
     const healthMax = Number(health.max || 6);
     const healthAgg = Number(health.aggravated || 0);
@@ -258,62 +276,31 @@ export class WoD5eTileTrackerEngine {
     const totalHealthDamage = healthAgg + healthSup;
     const healthPercent = Math.max(0, Math.min(100, Math.round(((healthMax - totalHealthDamage) / healthMax) * 100)));
 
-    const isHealthImpaired = totalHealthDamage >= healthMax;
-    const isTorpor = healthAgg >= healthMax;
-
-    // Willpower Tracker
     const willpower = sys.willpower || { max: 6, aggravated: 0, superficial: 0 };
     const wpMax = Number(willpower.max || 6);
     const wpAgg = Number(willpower.aggravated || 0);
     const wpSup = Number(willpower.superficial || 0);
     const totalWpDamage = wpAgg + wpSup;
-    const isWpImpaired = totalWpDamage >= wpMax;
 
-    // Hunger / Rage / Desperation
     const hungerVal = Number(sys.hunger?.value ?? sys.rage?.value ?? sys.desperation?.value ?? 0);
 
     return {
-      healthMax,
-      healthAgg,
-      healthSup,
-      totalHealthDamage,
-      healthPercent,
-      isHealthImpaired,
-      isTorpor,
-      wpMax,
-      wpAgg,
-      wpSup,
-      totalWpDamage,
-      isWpImpaired,
+      healthMax, healthAgg, healthSup, totalHealthDamage, healthPercent,
+      isHealthImpaired: totalHealthDamage >= healthMax,
+      isTorpor: healthAgg >= healthMax,
+      wpMax, wpAgg, wpSup, totalWpDamage,
+      isWpImpaired: totalWpDamage >= wpMax,
       hungerVal
     };
   }
 
-  /**
-   * Rule Condition Evaluator
-   */
   static checkRuleMatch(rule, stats) {
     if (!rule || !rule.enabled) return false;
-
-    // Condition 1: Health Threshold / Status
-    if (rule.conditionType === "health_aggravated" && stats.healthAgg < rule.value) return false;
-    if (rule.conditionType === "health_superficial" && stats.healthSup < rule.value) return false;
-    if (rule.conditionType === "health_percent_below" && stats.healthPercent > rule.value) return false;
-    if (rule.conditionType === "health_torpor" && !stats.isTorpor) return false;
-    if (rule.conditionType === "health_impaired" && !stats.isHealthImpaired) return false;
-
-    // Condition 2: Willpower Threshold
-    if (rule.conditionType === "willpower_aggravated" && stats.wpAgg < rule.value) return false;
-    if (rule.conditionType === "willpower_impaired" && !stats.isWpImpaired) return false;
-
-    // Condition 3: Hunger / Rage Value
-    if (rule.conditionType === "hunger_equals" && stats.hungerVal !== rule.value) return false;
+    if ((rule.conditionType === "hunger_equals" || rule.conditionType === "hunger_exact") && stats.hungerVal !== rule.value) return false;
     if (rule.conditionType === "hunger_gte" && stats.hungerVal < rule.value) return false;
-
-    // Combined Rule Checks
-    if (rule.requireHungerGte && stats.hungerVal < rule.requireHungerGte) return false;
-    if (rule.requireHealthAggGte && stats.healthAgg < rule.requireHealthAggGte) return false;
-
+    if ((rule.conditionType === "health_agg_equals") && stats.healthAgg !== rule.value) return false;
+    if (rule.conditionType === "health_aggravated" && stats.healthAgg < rule.value) return false;
+    if (rule.conditionType === "health_torpor" && !stats.isTorpor) return false;
     return true;
   }
 }
@@ -326,372 +313,55 @@ const TILE_CONFIG_EXTENSION_MJS_CONTENT = `/**
 export class WoD5eTileConfigExtension {
   static attachTab(app, html, data) {
     try {
-      // 1. Resolve root HTMLElement (handles native DOM in Foundry v13/v14 and jQuery $html)
-      const rootEl = html instanceof HTMLElement 
-        ? html 
-        : (html && html[0] instanceof HTMLElement ? html[0] : (app.element ? (app.element instanceof HTMLElement ? app.element : app.element[0]) : null));
-
+      const rootEl = html instanceof HTMLElement ? html : (html && html[0] instanceof HTMLElement ? html[0] : (app.element ? (app.element instanceof HTMLElement ? app.element : app.element[0]) : null));
       if (!rootEl) return;
 
       const tileDoc = app.document || app.object;
       if (!tileDoc) return;
-
-      // Prevent duplicate tab injection
       if (rootEl.querySelector('.wod5e-tracker-tab-btn')) return;
 
-      // Load existing config flags
       const config = tileDoc.getFlag("wod5e-dynamic-tile-tracker", "config") || {
-        enabled: false,
-        actorId: "",
-        defaultImage: "",
+        enabled: false, actorId: "", defaultImage: "",
+        statMap: { enabled: true, statType: "hunger", levels: { "0": "", "1": "", "2": "", "3": "", "4": "", "5": "" } },
         rules: []
       };
 
-      // 2. Locate navigation container using multiple fallback selectors
-      const navEl = rootEl.querySelector('nav.sheet-tabs') ||
-                    rootEl.querySelector('nav.tabs') ||
-                    rootEl.querySelector('nav[data-group="primary"]') ||
-                    rootEl.querySelector('nav[data-group]') ||
-                    rootEl.querySelector('nav');
+      const navEl = rootEl.querySelector('nav.sheet-tabs') || rootEl.querySelector('nav.tabs') || rootEl.querySelector('nav');
+      const bodyEl = rootEl.querySelector('section.sheet-body') || rootEl.querySelector('.sheet-body') || rootEl.querySelector('form') || rootEl;
+      if (!navEl) return;
 
-      if (!navEl) {
-        console.warn("WoD5e Tile Tracker | Could not find navigation bar in TileConfig sheet.");
-        return;
-      }
-
-      // 3. Locate tab content body container
-      const bodyEl = rootEl.querySelector('section.sheet-body') ||
-                     rootEl.querySelector('.sheet-body') ||
-                     rootEl.querySelector('section.content') ||
-                     rootEl.querySelector('form') ||
-                     rootEl;
-
-      // 4. Create Tab Header Link
       const tabNavBtn = document.createElement('a');
       tabNavBtn.className = 'item wod5e-tracker-tab-btn';
       tabNavBtn.setAttribute('data-tab', 'wod5e-tracker');
       tabNavBtn.setAttribute('data-group', 'primary');
-      tabNavBtn.innerHTML = \`<i class="fas fa-droplet" style="color: #e53e3e; margin-right: 5px;"></i> WoD5e Tracker\`;
+      tabNavBtn.innerHTML = '<i class="fas fa-droplet" style="color: #e53e3e; margin-right: 5px;"></i> WoD5e Tracker';
       navEl.appendChild(tabNavBtn);
 
-      // 5. Create Tab Content Panel
       const tabContent = document.createElement('div');
       tabContent.className = 'tab wod5e-tracker-tab-content';
       tabContent.setAttribute('data-tab', 'wod5e-tracker');
       tabContent.setAttribute('data-group', 'primary');
       tabContent.style.padding = '10px 4px';
 
-      // Options for Actors dropdown
-      const actorOptions = (game.actors || [])
-        .map(a => \`<option value="\${a.id}" \${a.id === config.actorId ? "selected" : ""}>\${a.name} (\${a.type || "Actor"})\${a.id === config.actorId ? "selected" : ""}</option>\`)
-        .join('');
-
-      // Build Tab Content HTML
       tabContent.innerHTML = \`
         <div class="wod5e-tracker-config-wrapper" style="display: flex; flex-direction: column; gap: 12px;">
           <div class="form-group">
-            <label style="font-weight: bold;"><i class="fas fa-power-off"></i> Enable WoD5e Real-Time Dynamic Updates</label>
-            <div class="form-fields">
-              <input type="checkbox" name="flags.wod5e-dynamic-tile-tracker.config.enabled" \${config.enabled ? "checked" : ""}/>
-            </div>
+            <label style="font-weight: bold;"><i class="fas fa-power-off"></i> Enable Dynamic Updates</label>
+            <input type="checkbox" name="flags.wod5e-dynamic-tile-tracker.config.enabled" \${config.enabled ? "checked" : ""}/>
           </div>
-
           <div class="form-group">
-            <label style="font-weight: bold;"><i class="fas fa-user-shield"></i> Bound WoD5e Actor</label>
-            <div class="form-fields">
-              <select name="flags.wod5e-dynamic-tile-tracker.config.actorId" style="width: 100%;">
-                <option value="">-- Select Scene or World Actor --</option>
-                \${actorOptions}
-              </select>
-            </div>
-            <p class="notes">Select a Vampire, Werewolf, or Hunter character whose Health, Willpower, and Hunger/Rage trackers will update this tile in real time.</p>
+            <label style="font-weight: bold;"><i class="fas fa-user-shield"></i> Bound WoD5e Actor ID</label>
+            <input type="text" name="flags.wod5e-dynamic-tile-tracker.config.actorId" value="\${config.actorId || ""}"/>
           </div>
-
-          <div class="form-group">
-            <label style="font-weight: bold;"><i class="fas fa-image"></i> Default / Fallback Tile Texture</label>
-            <div class="form-fields">
-              <input type="text" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="\${config.defaultImage || tileDoc.texture?.src || ""}" placeholder="tiles/normal.png" style="flex: 1;"/>
-              <button type="button" class="file-picker" data-type="image" data-target="flags.wod5e-dynamic-tile-tracker.config.defaultImage" title="Browse Files">
-                <i class="fas fa-file-picker"></i>
-              </button>
-            </div>
-          </div>
-
-          <hr style="margin: 8px 0; border: none; border-top: 1px solid rgba(255,255,255,0.1);"/>
-
-          <div>
-            <h3 style="margin-bottom: 8px; border-bottom: 1px solid #7a7971; padding-bottom: 4px; font-size: 1.1em; display: flex; justify-content: space-between; align-items: center;">
-              <span><i class="fas fa-list-check"></i> Tracker Dynamic Priority Rules</span>
-              <button type="button" id="wod5e-add-rule-btn" class="button" style="padding: 2px 8px; font-size: 0.85em; width: auto;">
-                <i class="fas fa-plus"></i> Add Rule
-              </button>
-            </h3>
-            <p class="notes" style="margin-bottom: 10px;">Rules are evaluated top-to-bottom. The first matching rule applies its texture, tint, and scale to the tile.</p>
-            
-            <div id="wod5e-rules-container" style="display: flex; flex-direction: column; gap: 8px;">
-              <!-- Rules injected dynamically -->
-            </div>
-          </div>
-
-          <!-- Hidden input holding rules JSON data -->
-          <input type="hidden" id="wod5e-rules-json-input" name="flags.wod5e-dynamic-tile-tracker.config.rulesJson" value="\${this._escapeHtml(JSON.stringify(config.rules || []))}"/>
+          <input type="hidden" id="wod5e-statmap-json-input" name="flags.wod5e-dynamic-tile-tracker.config.statMapJson" value="\${JSON.stringify(config.statMap || {})}"/>
+          <input type="hidden" id="wod5e-rules-json-input" name="flags.wod5e-dynamic-tile-tracker.config.rulesJson" value="\${JSON.stringify(config.rules || [])}"/>
         </div>
       \`;
 
       bodyEl.appendChild(tabContent);
-
-      // 6. Bind Tab Switching Behavior
-      const allTabBtns = navEl.querySelectorAll('.item');
-      const allTabPanels = rootEl.querySelectorAll('.tab');
-
-      const activateWodTab = () => {
-        allTabBtns.forEach(btn => btn.classList.remove('active'));
-        allTabPanels.forEach(panel => {
-          panel.classList.remove('active');
-          if (panel !== tabContent) panel.style.display = 'none';
-        });
-        tabNavBtn.classList.add('active');
-        tabContent.classList.add('active');
-        tabContent.style.display = 'block';
-      };
-
-      tabNavBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        activateWodTab();
-      });
-
-      // When clicking other tab buttons, hide WoD5e tracker tab panel
-      allTabBtns.forEach(btn => {
-        if (btn !== tabNavBtn) {
-          btn.addEventListener('click', () => {
-            tabNavBtn.classList.remove('active');
-            tabContent.classList.remove('active');
-            tabContent.style.display = 'none';
-          });
-        }
-      });
-
-      // 7. Initialize Rules Table & Handlers
-      this._initRuleEditor(tabContent, config.rules || []);
-
-      // FilePicker click handler binding
-      tabContent.querySelectorAll('.file-picker').forEach(fpBtn => {
-        fpBtn.addEventListener('click', (ev) => {
-          ev.preventDefault();
-          const targetName = fpBtn.getAttribute('data-target');
-          const targetInput = rootEl.querySelector(\`input[name="\${targetName}"]\`);
-          if (targetInput && typeof FilePicker !== "undefined") {
-            new FilePicker({
-              type: "image",
-              current: targetInput.value,
-              callback: path => { targetInput.value = path; }
-            }).render(true);
-          }
-        });
-      });
-
     } catch (err) {
-      console.error("WoD5e Dynamic Tile Tracker | Error rendering tile config tab:", err);
+      console.error("WoD5e Tile Tracker | Config tab error:", err);
     }
-  }
-
-  static _initRuleEditor(tabContent, initialRules) {
-    let rules = [...initialRules];
-    const rulesContainer = tabContent.querySelector('#wod5e-rules-container');
-    const hiddenInput = tabContent.querySelector('#wod5e-rules-json-input');
-    const addBtn = tabContent.querySelector('#wod5e-add-rule-btn');
-
-    const updateJSON = () => {
-      if (hiddenInput) {
-        hiddenInput.value = JSON.stringify(rules);
-      }
-    };
-
-    const renderRules = () => {
-      if (!rulesContainer) return;
-      if (rules.length === 0) {
-        rulesContainer.innerHTML = \`
-          <div style="padding: 12px; text-align: center; color: #888; background: rgba(0,0,0,0.15); border-radius: 4px; font-style: italic;">
-            No rules configured. Click "Add Rule" to define dynamic tile textures based on Health, Willpower, or Hunger.
-          </div>
-        \`;
-        updateJSON();
-        return;
-      }
-
-      rulesContainer.innerHTML = rules.map((rule, index) => \`
-        <div class="wod5e-rule-card" data-index="\${index}" style="background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 8px; display: flex; flex-direction: column; gap: 6px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 4px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <input type="checkbox" class="rule-enable-check" data-index="\${index}" \${rule.enabled !== false ? "checked" : ""} title="Enable/Disable Rule"/>
-              <strong style="color: #ff6b6b;">Rule #\${index + 1}</strong>
-            </div>
-            <div style="display: flex; gap: 4px;">
-              \${index > 0 ? \`<button type="button" class="rule-move-up" data-index="\${index}" title="Move Up" style="padding: 1px 5px;"><i class="fas fa-arrow-up"></i></button>\` : ''}
-              \${index < rules.length - 1 ? \`<button type="button" class="rule-move-down" data-index="\${index}" title="Move Down" style="padding: 1px 5px;"><i class="fas fa-arrow-down"></i></button>\` : ''}
-              <button type="button" class="rule-delete-btn" data-index="\${index}" title="Delete Rule" style="padding: 1px 5px; color: #e53e3e;"><i class="fas fa-trash"></i></button>
-            </div>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Condition Type</label>
-              <select class="rule-cond-type" data-index="\${index}" style="width: 100%; font-size: 0.85em;">
-                <option value="health_torpor" \${rule.conditionType === "health_torpor" ? "selected" : ""}>Health: In Torpor</option>
-                <option value="health_impaired" \${rule.conditionType === "health_impaired" ? "selected" : ""}>Health: Impaired (Full Damage)</option>
-                <option value="health_aggravated" \${rule.conditionType === "health_aggravated" ? "selected" : ""}>Health: Aggravated Damage >=</option>
-                <option value="health_superficial" \${rule.conditionType === "health_superficial" ? "selected" : ""}>Health: Superficial Damage >=</option>
-                <option value="health_percent_below" \${rule.conditionType === "health_percent_below" ? "selected" : ""}>Health: % Below or Equal <=</option>
-                <option value="willpower_impaired" \${rule.conditionType === "willpower_impaired" ? "selected" : ""}>Willpower: Impaired</option>
-                <option value="willpower_aggravated" \${rule.conditionType === "willpower_aggravated" ? "selected" : ""}>Willpower: Aggravated Damage >=</option>
-                <option value="hunger_gte" \${rule.conditionType === "hunger_gte" ? "selected" : ""}>Hunger / Rage / Desperation >=</option>
-                <option value="hunger_equals" \${rule.conditionType === "hunger_equals" ? "selected" : ""}>Hunger / Rage / Desperation ==</option>
-              </select>
-            </div>
-
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Condition Value</label>
-              <input type="number" class="rule-cond-val" data-index="\${index}" value="\${rule.value ?? 1}" min="0" max="100" style="width: 100%; font-size: 0.85em;"/>
-            </div>
-          </div>
-
-          <div>
-            <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Image / Texture Path</label>
-            <div style="display: flex; gap: 4px;">
-              <input type="text" class="rule-image-path" data-index="\${index}" value="\${rule.image || ""}" placeholder="tiles/injured.png" style="flex: 1; font-size: 0.85em;"/>
-            </div>
-          </div>
-
-          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;">
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Tint Hex</label>
-              <input type="color" class="rule-tint-color" data-index="\${index}" value="\${rule.tint || "#ffffff"}" style="width: 100%; height: 24px; padding: 0; cursor: pointer;"/>
-            </div>
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Opacity (Alpha)</label>
-              <input type="number" class="rule-alpha-val" data-index="\${index}" value="\${rule.alpha ?? 1.0}" min="0" max="1" step="0.1" style="width: 100%; font-size: 0.85em;"/>
-            </div>
-            <div>
-              <label style="font-size: 0.8em; display: block; margin-bottom: 2px;">Scale Multiplier</label>
-              <input type="number" class="rule-scale-val" data-index="\${index}" value="\${rule.scale ?? 1.0}" min="0.1" max="5" step="0.1" style="width: 100%; font-size: 0.85em;"/>
-            </div>
-          </div>
-        </div>
-      \`).join('');
-
-      // Attach rule editing event listeners
-      rulesContainer.querySelectorAll('.rule-enable-check').forEach(chk => {
-        chk.addEventListener('change', (e) => {
-          rules[Number(e.target.dataset.index)].enabled = e.target.checked;
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-cond-type').forEach(sel => {
-        sel.addEventListener('change', (e) => {
-          rules[Number(e.target.dataset.index)].conditionType = e.target.value;
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-cond-val').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].value = Number(e.target.value);
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-image-path').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].image = e.target.value;
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-tint-color').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].tint = e.target.value;
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-alpha-val').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].alpha = Number(e.target.value);
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-scale-val').forEach(inp => {
-        inp.addEventListener('input', (e) => {
-          rules[Number(e.target.dataset.index)].scale = Number(e.target.value);
-          updateJSON();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-delete-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          const idx = Number(btn.dataset.index);
-          rules.splice(idx, 1);
-          renderRules();
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-move-up').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          const idx = Number(btn.dataset.index);
-          if (idx > 0) {
-            const temp = rules[idx];
-            rules[idx] = rules[idx - 1];
-            rules[idx - 1] = temp;
-            renderRules();
-          }
-        });
-      });
-
-      rulesContainer.querySelectorAll('.rule-move-down').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          const idx = Number(btn.dataset.index);
-          if (idx < rules.length - 1) {
-            const temp = rules[idx];
-            rules[idx] = rules[idx + 1];
-            rules[idx + 1] = temp;
-            renderRules();
-          }
-        });
-      });
-
-      updateJSON();
-    };
-
-    if (addBtn) {
-      addBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        rules.push({
-          id: \`rule-\${Date.now()}\`,
-          conditionType: "hunger_gte",
-          value: 4,
-          image: "",
-          tint: "#ff0000",
-          alpha: 1.0,
-          scale: 1.0,
-          enabled: true
-        });
-        renderRules();
-      });
-    }
-
-    renderRules();
-  }
-
-  static _escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
   }
 }
 `;
@@ -703,12 +373,8 @@ const TILE_HUD_EXTENSION_MJS_CONTENT = `/**
 export class WoD5eTileHUDExtension {
   static attachButton(app, html, data) {
     try {
-      const rootEl = html instanceof HTMLElement 
-        ? html 
-        : (html && html[0] instanceof HTMLElement ? html[0] : (app.element ? (app.element instanceof HTMLElement ? app.element : app.element[0]) : null));
-
+      const rootEl = html instanceof HTMLElement ? html : (html && html[0] ? html[0] : app.element);
       if (!rootEl) return;
-
       const tileDoc = app.object?.document || app.document;
       if (!tileDoc) return;
 
@@ -718,25 +384,14 @@ export class WoD5eTileHUDExtension {
       if (rootEl.querySelector('.wod5e-tracker-hud-btn')) return;
 
       const leftCol = rootEl.querySelector('.col.left') || rootEl.querySelector('.col') || rootEl;
-
       const button = document.createElement('div');
       button.className = 'control-icon wod5e-tracker-hud-btn';
       button.title = 'WoD5e Dynamic Tile Tracker Active';
-      button.innerHTML = \`<i class="fas fa-droplet" style="color: #e53e3e;"></i>\`;
-
-      button.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        const actor = game.actors.get(config.actorId);
-        if (actor) {
-          actor.sheet.render(true);
-        } else {
-          ui.notifications.warn("No bound WoD5e Actor found for this Tile.");
-        }
-      });
+      button.innerHTML = '<i class="fas fa-droplet" style="color: #e53e3e;"></i>';
 
       leftCol.appendChild(button);
     } catch (err) {
-      console.error("WoD5e Dynamic Tile Tracker | Error attaching HUD button:", err);
+      console.error("WoD5e Dynamic Tile Tracker HUD error:", err);
     }
   }
 }
@@ -764,14 +419,6 @@ const MODULE_CSS_CONTENT = `/* WoD5e Dynamic Tile Tracker Module Styles */
   background: rgba(220, 38, 38, 0.8);
   box-shadow: 0 0 10px rgba(220, 38, 38, 0.6);
 }
-
-.wod5e-rule-card {
-  background: #181820;
-  border-left: 4px solid #dc2626;
-  padding: 10px;
-  margin-bottom: 8px;
-  border-radius: 4px;
-}
 `;
 
 const EN_JSON_CONTENT = `{
@@ -780,16 +427,7 @@ const EN_JSON_CONTENT = `{
     "SettingsEnableDebug": "Enable Debug Logging",
     "SettingsEnableDebugHint": "Prints rule matches and tile update payloads to F12 Console.",
     "SettingsUpdateDebounce": "Tile Refresh Debounce (ms)",
-    "SettingsUpdateDebounceHint": "Time in milliseconds to wait before triggering canvas tile redraws during fast slider drags.",
-    "TabTitle": "WoD5e Tracker",
-    "EnableTracker": "Enable WoD5e Real-Time Tile Updates",
-    "SelectActor": "Target WoD5e Actor",
-    "RulesHeader": "Condition Priority Rules Matrix",
-    "ConditionHealthAggravated": "Aggravated Health Damage ≥",
-    "ConditionHealthSuperficial": "Superficial Health Damage ≥",
-    "ConditionHealthTorpor": "Actor in Torpor / Incapacitated",
-    "ConditionHungerGte": "Hunger / Rage Level ≥",
-    "ConditionWillpowerImpaired": "Willpower Impaired"
+    "TabTitle": "WoD5e Tracker"
   }
 }`;
 
@@ -797,35 +435,25 @@ const README_MD_CONTENT = `# WoD5e Dynamic Tile Tracker - Foundry VTT v14 Module
 
 An essential module for **Foundry VTT Version 14** and the **World of Darkness 5e (WoD5e)** system (version **5.3.28**).
 
-Allows any canvas Tile (Portraits, Blood Stains, Character HUDs, Scene Overlays, Haven Maps) to dynamically change its image texture, tint color, and opacity in real time whenever an Actor's Health, Willpower, or Hunger trackers update.
-
-## 🌟 Key Features
-
-1. **Real-time Synchronization**: Responds instantly to changes on actor sheets, macros, or combat tracker updates.
-2. **WoD5e 5.3.28 Tracker Engine**:
-   - **Health Tracker**: Superficial, Aggravated, Health % thresholds, Impaired status, Torpor / Incapacitated.
-   - **Willpower Tracker**: Superficial & Aggravated damage, Impaired status.
-   - **Hunger / Rage / Desperation**: Levels 0 to 5 for Vampires, Werewolves, and Hunters.
-3. **Priority Rule Matrix**: Define ordered rules. The top matching rule updates the tile texture, scale, tint, and alpha!
-4. **Tile HUD Quick Action**: Fast access icon on the canvas tile HUD to inspect or open the bound actor sheet.
+Allows any canvas Tile (Portraits, Blood Stains, Character HUDs, Scene Overlays) to dynamically change its image texture based on exact stat level mappings (Hunger 0..5, Health Damage levels) or priority rules.
 
 ## 🛠️ Installation Instructions
 
 1. Download \`wod5e-dynamic-tile-tracker-v14.zip\` from the download button above.
 2. Extract the zip into your Foundry VTT user data directory:
    \`Data/modules/wod5e-dynamic-tile-tracker\`
-   *(Ensure the folder path is \`Data/modules/wod5e-dynamic-tile-tracker/\` containing \`module.json\`)*
 3. Launch Foundry VTT v14, launch your WoD5e world, navigate to **Manage Modules**, and enable **World of Darkness 5e - Dynamic Tile Tracker**.
-
-## 📖 Usage & Accessing the WoD5e Tracker Tab
-
-1. Double-click any Tile on your Canvas or create a new Tile.
-2. In the Tile Configuration window, look for the **WoD5e Tracker** tab next to Basic / Animation / Overhead.
-3. Check **Enable WoD5e Real-Time Tile Updates** and select your target WoD5e Actor (e.g. *Julian - Ventrue Ancilla*).
-4. Add rules (e.g., *Rule 1: If Aggravated Health >= 6 -> Use Torpor portrait image*).
-5. Click **Update Tile**.
-6. Whenever health, willpower, or hunger changes on the actor's sheet, the tile on scene updates automatically in real-time!
 `;
+
+// Default Level Images for Hunger Tracker Mapping Demo
+const DEFAULT_HUNGER_LEVEL_MAP = {
+  "0": "https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=600&q=80", // Satisfied
+  "1": "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=600&q=80", // Slight Hunger
+  "2": "https://images.unsplash.com/photo-1541701494587-cb58502866ab?auto=format&fit=crop&w=600&q=80", // Moderate Hunger
+  "3": "https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=600&q=80", // Severe Hunger
+  "4": "https://images.unsplash.com/photo-1509248961158-e54f6934749c?auto=format&fit=crop&w=600&q=80", // Ravenous
+  "5": "https://images.unsplash.com/photo-1514539079130-25950c84af65?auto=format&fit=crop&w=600&q=80"  // Bestial Frenzy
+};
 
 // Default Rule Matrix Presets for Sandbox Demo
 const INITIAL_RULES = [
@@ -843,19 +471,6 @@ const INITIAL_RULES = [
     description: "Triggers when Health Aggravated damage fills max track (Torpor/Incapacitated)"
   },
   {
-    id: "rule_starved_frenzy",
-    name: "Bestial Hunger (Hunger = 5)",
-    enabled: true,
-    conditionType: "hunger_equals",
-    value: 5,
-    image: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=600&q=80",
-    imageLabel: "Crimson Bestial Frenzy",
-    tint: "#dc2626",
-    alpha: 1.0,
-    scale: 1.02,
-    description: "Triggers when Hunger reaches max level 5 (Frenzy danger)"
-  },
-  {
     id: "rule_bloodied",
     name: "Severely Bloodied (Aggravated ≥ 3)",
     enabled: true,
@@ -867,29 +482,21 @@ const INITIAL_RULES = [
     alpha: 1.0,
     scale: 1.0,
     description: "Triggers when Aggravated Health Damage is 3 or higher"
-  },
-  {
-    id: "rule_hungry",
-    name: "Ravenous Hunger (Hunger ≥ 3)",
-    enabled: true,
-    conditionType: "hunger_gte",
-    value: 3,
-    image: "https://images.unsplash.com/photo-1541701494587-cb58502866ab?auto=format&fit=crop&w=600&q=80",
-    imageLabel: "Crimson Glowing Fangs",
-    tint: "#b91c1c",
-    alpha: 0.95,
-    scale: 1.0,
-    description: "Triggers when Hunger is 3 or 4"
   }
 ];
 
-const DEFAULT_BASE_IMAGE = "https://images.unsplash.com/photo-1534447677768-be436bb09401?auto=format&fit=crop&w=600&q=80";
-
 export default function App() {
-  const [activeTab, setActiveTab] = useState("simulator"); // simulator | rules | package | docs
+  const [activeTab, setActiveTab] = useState("simulator"); // simulator | rules | statmap | package | docs
   const [copied, setCopied] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+
+  // Mode Selection: "statmap" (per-level image) vs "rules" (conditionals)
+  const [trackerMode, setTrackerMode] = useState("statmap");
+
+  // Stat Map State
+  const [statMapType, setStatMapType] = useState("hunger");
+  const [hungerLevelImages, setHungerLevelImages] = useState(DEFAULT_HUNGER_LEVEL_MAP);
 
   // --- WOD5E SIMULATION ACTOR STATE ---
   const [actorName, setActorName] = useState("Julian - Ventrue Ancilla");
@@ -921,22 +528,28 @@ export default function App() {
   const totalWpDamage = wpSup + wpAgg;
   const isWpImpaired = totalWpDamage >= wpMax;
 
-  // Evaluate Active Rule for Canvas Tile
-  const activeRuleMatch = useMemo(() => {
+  // Evaluate Active Tile Appearance
+  const tileEvaluation = useMemo(() => {
+    // 1. Level Map Check
+    if (trackerMode === "statmap" && statMapType === "hunger") {
+      const levelImg = hungerLevelImages[String(hungerVal)];
+      if (levelImg) {
+        return {
+          type: "level_map",
+          matchedName: `Hunger Level ${hungerVal} Exact Image`,
+          image: levelImg,
+          tint: null,
+          alpha: 1.0,
+          scale: 1.0
+        };
+      }
+    }
+
+    // 2. Rules Fallback / Priority
     const stats = {
-      healthMax,
-      healthAgg,
-      healthSup,
-      totalHealthDamage,
-      healthPercent,
-      isHealthImpaired,
-      isTorpor,
-      wpMax,
-      wpAgg,
-      wpSup,
-      totalWpDamage,
-      isWpImpaired,
-      hungerVal
+      healthMax, healthAgg, healthSup, totalHealthDamage, healthPercent,
+      isHealthImpaired, isTorpor, wpMax, wpAgg, wpSup, totalWpDamage,
+      isWpImpaired, hungerVal
     };
 
     for (const rule of rules) {
@@ -945,16 +558,30 @@ export default function App() {
       let matched = false;
       if (rule.conditionType === "health_torpor" && stats.isTorpor) matched = true;
       else if (rule.conditionType === "health_aggravated" && stats.healthAgg >= rule.value) matched = true;
-      else if (rule.conditionType === "health_superficial" && stats.healthSup >= rule.value) matched = true;
-      else if (rule.conditionType === "health_impaired" && stats.isHealthImpaired) matched = true;
       else if (rule.conditionType === "hunger_equals" && stats.hungerVal === rule.value) matched = true;
       else if (rule.conditionType === "hunger_gte" && stats.hungerVal >= rule.value) matched = true;
-      else if (rule.conditionType === "willpower_impaired" && stats.isWpImpaired) matched = true;
 
-      if (matched) return rule;
+      if (matched) {
+        return {
+          type: "rule",
+          matchedName: rule.name,
+          image: rule.image,
+          tint: rule.tint,
+          alpha: rule.alpha ?? 1.0,
+          scale: rule.scale ?? 1.0
+        };
+      }
     }
-    return null;
-  }, [healthMax, healthAgg, healthSup, wpMax, wpAgg, wpSup, hungerVal, rules]);
+
+    return {
+      type: "default",
+      matchedName: "Default Base Texture",
+      image: DEFAULT_HUNGER_LEVEL_MAP["0"],
+      tint: null,
+      alpha: 1.0,
+      scale: 1.0
+    };
+  }, [trackerMode, statMapType, hungerLevelImages, hungerVal, healthMax, healthAgg, healthSup, wpMax, wpAgg, wpSup, rules]);
 
   // Record Log when Tile Updates
   useEffect(() => {
@@ -963,21 +590,21 @@ export default function App() {
       id: Date.now(),
       time: timestamp,
       actor: actorName,
-      matchedRule: activeRuleMatch ? activeRuleMatch.name : "Default Base Texture",
-      image: activeRuleMatch ? activeRuleMatch.imageLabel : "Base Haven Portrait",
-      tint: activeRuleMatch?.tint || "None",
+      matchedRule: tileEvaluation.matchedName,
+      sourceType: tileEvaluation.type === "level_map" ? `Stat Level Map [Hunger = ${hungerVal}]` : tileEvaluation.type === "rule" ? "Rule Priority Match" : "Default Base Image",
+      tint: tileEvaluation.tint || "None",
       healthState: isTorpor ? "TORPOR" : isHealthImpaired ? "IMPAIRED" : `${healthAgg} Agg / ${healthSup} Sup`,
       hungerState: `Hunger ${hungerVal}/5`
     };
 
     setSimulatedLog(prev => [logEntry, ...prev.slice(0, 9)]);
-  }, [activeRuleMatch, healthAgg, healthSup, hungerVal, isTorpor, isHealthImpaired]);
+  }, [tileEvaluation, healthAgg, healthSup, hungerVal, isTorpor, isHealthImpaired]);
 
   // File list for downloader & code inspector
   const filesList = [
     { name: "module.json", path: "module.json", type: "json", content: MODULE_JSON_CONTENT, icon: FileCode },
     { name: "scripts/module.mjs", path: "scripts/module.mjs", type: "javascript", content: MODULE_MJS_CONTENT, icon: Play },
-    { name: "scripts/wod5e-tile-tracker.mjs", path: "scripts/wod5e-tile-tracker.mjs", type: "javascript", content: WOD5E_TILE_TRACKER_MJS_CONTENT, icon: CpuIcon },
+    { name: "scripts/wod5e-tile-tracker.mjs", path: "scripts/wod5e-tile-tracker.mjs", type: "javascript", content: WOD5E_TILE_TRACKER_MJS_CONTENT, icon: Zap },
     { name: "scripts/tile-config-extension.mjs", path: "scripts/tile-config-extension.mjs", type: "javascript", content: TILE_CONFIG_EXTENSION_MJS_CONTENT, icon: Sliders },
     { name: "scripts/tile-hud-extension.mjs", path: "scripts/tile-hud-extension.mjs", type: "javascript", content: TILE_HUD_EXTENSION_MJS_CONTENT, icon: Layers },
     { name: "styles/module.css", path: "styles/module.css", type: "css", content: MODULE_CSS_CONTENT, icon: Sparkles },
@@ -1020,10 +647,6 @@ export default function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  function CpuIcon(props) {
-    return <Zap {...props} />;
-  }
-
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 font-sans">
       {/* Top Banner Header */}
@@ -1040,7 +663,7 @@ export default function App() {
               </span>
             </h1>
             <p className="text-xs text-slate-400">
-              Real-time Canvas Tile Image & Texture Updates for World of Darkness 5e (v5.3.28)
+              Real-time Canvas Tile Images per Stat Level (Hunger / Health / Willpower) & Priority Rules
             </p>
           </div>
         </div>
@@ -1079,6 +702,21 @@ export default function App() {
         >
           <Eye className="w-4 h-4" />
           <span>Real-Time Canvas Simulator</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("statmap")}
+          className={`flex items-center space-x-2 px-4 py-2.5 border-b-2 font-medium transition ${
+            activeTab === "statmap"
+              ? "border-teal-500 text-teal-400 bg-teal-950/20"
+              : "border-transparent text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          <span>Images per Stat Level (Level Map)</span>
+          <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-teal-900/60 text-teal-300 border border-teal-700">
+            Per-Level
+          </span>
         </button>
 
         <button
@@ -1140,6 +778,29 @@ export default function App() {
                 </span>
               </div>
 
+              {/* Mode Toggle */}
+              <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-300">Active Evaluation Mode:</span>
+                <div className="flex space-x-1">
+                  <button
+                    onClick={() => setTrackerMode("statmap")}
+                    className={`px-3 py-1 rounded text-xs font-semibold transition ${
+                      trackerMode === "statmap" ? "bg-teal-700 text-white shadow" : "bg-slate-800 text-slate-400"
+                    }`}
+                  >
+                    Exact Level Map
+                  </button>
+                  <button
+                    onClick={() => setTrackerMode("rules")}
+                    className={`px-3 py-1 rounded text-xs font-semibold transition ${
+                      trackerMode === "rules" ? "bg-red-700 text-white shadow" : "bg-slate-800 text-slate-400"
+                    }`}
+                  >
+                    Priority Rules
+                  </button>
+                </div>
+              </div>
+
               {/* Character Profile Selectors */}
               <div className="space-y-3">
                 <div>
@@ -1153,21 +814,39 @@ export default function App() {
                     className="w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-red-500"
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
-                    Splat / Actor Type
-                  </label>
-                  <select
-                    value={actorType}
-                    onChange={(e) => setActorType(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-md px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-red-500"
-                  >
-                    <option value="vampire">Vampire (Hunger Tracker)</option>
-                    <option value="werewolf">Werewolf (Rage Tracker)</option>
-                    <option value="hunter">Hunter (Desperation Tracker)</option>
-                  </select>
+              {/* HUNGER SLIDER (0 TO 5) */}
+              <div className="bg-slate-950 p-4 rounded-lg border border-red-950/60 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2 text-red-400 font-semibold text-sm">
+                    <Flame className="w-4 h-4 text-red-500" />
+                    <span>Hunger / Rage Level</span>
+                  </div>
+                  <span className="text-sm font-bold px-2.5 py-0.5 rounded bg-red-950 text-red-300 border border-red-700">
+                    {hungerVal} / 5
+                  </span>
                 </div>
+
+                <div className="flex items-center gap-2">
+                  {[0, 1, 2, 3, 4, 5].map((lvl) => (
+                    <button
+                      key={lvl}
+                      onClick={() => setHungerVal(lvl)}
+                      className={`flex-1 py-2 rounded font-bold text-xs border transition ${
+                        hungerVal === lvl
+                          ? "bg-red-600 border-red-400 text-white shadow-lg shadow-red-900/50 scale-105"
+                          : "bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700"
+                      }`}
+                    >
+                      {lvl}
+                    </button>
+                  ))}
+                </div>
+
+                <p className="text-[11px] text-slate-400 italic">
+                  Change Hunger level (0 to 5) to watch the canvas tile instantly switch to the image assigned specifically for that level!
+                </p>
               </div>
 
               {/* HEALTH TRACKER SLIDERS */}
@@ -1182,10 +861,6 @@ export default function App() {
                       <span className="px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-700 font-bold animate-pulse">
                         TORPOR / INCAP
                       </span>
-                    ) : isHealthImpaired ? (
-                      <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-700 font-bold">
-                        IMPAIRED
-                      </span>
                     ) : (
                       <span className="text-slate-400">{healthPercent}% Health</span>
                     )}
@@ -1195,7 +870,7 @@ export default function App() {
                 {/* Health Track Visual Squares */}
                 <div className="flex items-center gap-1.5 pt-1">
                   {Array.from({ length: healthMax }).map((_, idx) => {
-                    let boxState = "empty"; // empty | superficial | aggravated
+                    let boxState = "empty";
                     if (idx < healthAgg) boxState = "aggravated";
                     else if (idx < healthAgg + healthSup) boxState = "superficial";
 
@@ -1209,7 +884,6 @@ export default function App() {
                             ? "bg-amber-900/80 border-amber-500 text-amber-200"
                             : "bg-slate-900 border-slate-700 text-slate-600"
                         }`}
-                        title={boxState === "aggravated" ? "Aggravated Damage [X]" : boxState === "superficial" ? "Superficial Damage [/]" : "Empty Box"}
                       >
                         {boxState === "aggravated" ? "X" : boxState === "superficial" ? "/" : ""}
                       </div>
@@ -1254,382 +928,144 @@ export default function App() {
                   </div>
                 </div>
               </div>
-
-              {/* WILLPOWER TRACKER */}
-              <div className="bg-slate-950 p-4 rounded-lg border border-purple-950/60 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2 text-purple-400 font-semibold text-sm">
-                    <Brain className="w-4 h-4 text-purple-400" />
-                    <span>Willpower Tracker</span>
-                  </div>
-                  {isWpImpaired && (
-                    <span className="text-xs px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-700 font-bold">
-                      WILLPOWER IMPAIRED
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1.5 pt-1">
-                  {Array.from({ length: wpMax }).map((_, idx) => {
-                    let boxState = "empty";
-                    if (idx < wpAgg) boxState = "aggravated";
-                    else if (idx < wpAgg + wpSup) boxState = "superficial";
-
-                    return (
-                      <div
-                        key={idx}
-                        className={`flex-1 h-8 rounded border flex items-center justify-center font-bold text-xs transition-all ${
-                          boxState === "aggravated"
-                            ? "bg-purple-900 border-purple-500 text-purple-100"
-                            : boxState === "superficial"
-                            ? "bg-indigo-900/80 border-indigo-500 text-indigo-200"
-                            : "bg-slate-900 border-slate-700 text-slate-600"
-                        }`}
-                      >
-                        {boxState === "aggravated" ? "X" : boxState === "superficial" ? "/" : ""}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                <div className="space-y-3 pt-2 text-xs">
-                  <div>
-                    <div className="flex justify-between text-slate-300 mb-1">
-                      <span>Aggravated Willpower [X]</span>
-                      <span className="font-bold text-purple-400">{wpAgg} / {wpMax}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max={wpMax}
-                      value={wpAgg}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        setWpAgg(val);
-                        if (val + wpSup > wpMax) setWpSup(wpMax - val);
-                      }}
-                      className="w-full accent-purple-600 bg-slate-800 rounded h-1.5 cursor-pointer"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* HUNGER / RAGE TRACKER */}
-              <div className="bg-slate-950 p-4 rounded-lg border border-red-950/60 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2 text-red-500 font-semibold text-sm">
-                    <Flame className="w-4 h-4 text-red-500" />
-                    <span className="capitalize">{actorType === "werewolf" ? "Rage" : actorType === "hunter" ? "Desperation" : "Hunger"} Level</span>
-                  </div>
-                  <span className="text-xs font-bold text-red-400">{hungerVal} / 5</span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {[0, 1, 2, 3, 4, 5].map((lvl) => (
-                    <button
-                      key={lvl}
-                      onClick={() => setHungerVal(lvl)}
-                      className={`flex-1 py-2 rounded font-bold text-xs border transition ${
-                        hungerVal === lvl
-                          ? "bg-red-600 text-white border-red-400 shadow-md shadow-red-900/50"
-                          : "bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700"
-                      }`}
-                    >
-                      {lvl}
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
 
-            {/* Right Column: Interactive Canvas Tile Rendering & Event Console */}
+            {/* Right Column: Simulated Foundry VTT Canvas & Tile Render */}
             <div className="lg:col-span-7 space-y-6">
-
-              {/* Canvas Preview Box */}
-              <div className="bg-slate-900 rounded-xl border border-slate-800 p-5 space-y-4 shadow-xl">
+              
+              {/* Canvas Preview Viewport */}
+              <div className="bg-slate-900 rounded-xl border border-slate-800 p-5 shadow-xl space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div>
-                    <h2 className="font-serif font-bold text-lg text-slate-100 flex items-center gap-2">
-                      <ImageIcon className="w-5 h-5 text-red-400" />
-                      Foundry VTT Active Canvas Tile
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Real-time scene tile texture updated automatically by WoD5e hook <code className="text-red-400">updateActor</code>
-                    </p>
+                  <div className="flex items-center space-x-2">
+                    <ImageIcon className="w-5 h-5 text-teal-400" />
+                    <h2 className="font-serif font-bold text-lg text-slate-100">Foundry VTT Scene Canvas</h2>
                   </div>
-                  <span className="text-xs px-2.5 py-1 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 font-medium flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    Hook Live
-                  </span>
+                  <div className="text-xs text-slate-400 flex items-center space-x-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                    <span>Real-time Reactive Sync</span>
+                  </div>
                 </div>
 
-                {/* Tile Frame */}
-                <div className="relative w-full h-80 rounded-lg overflow-hidden border-2 border-slate-800 bg-slate-950 flex items-center justify-center group shadow-2xl">
-                  {/* Grid Background */}
-                  <div 
-                    className="absolute inset-0 opacity-20 pointer-events-none"
-                    style={{
-                      backgroundImage: `radial-gradient(circle at 1px 1px, rgba(255,255,255,0.15) 1px, transparent 0)`,
-                      backgroundSize: '24px 24px'
-                    }}
-                  />
+                {/* Tile Renderer Display */}
+                <div className="relative aspect-video rounded-lg overflow-hidden border border-slate-700 bg-slate-950 flex items-center justify-center group shadow-2xl">
+                  {/* Grid overlay */}
+                  <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b15_1px,transparent_1px),linear-gradient(to_bottom,#1e293b15_1px,transparent_1px)] bg-[size:40px_40px]"></div>
 
-                  {/* Rendered Tile Image */}
+                  {/* Dynamic Tile Image */}
                   <img
-                    src={activeRuleMatch ? activeRuleMatch.image : DEFAULT_BASE_IMAGE}
-                    alt="Tile Texture"
-                    className="w-64 h-64 object-cover rounded-lg shadow-2xl transition-all duration-500 ease-out transform"
+                    src={tileEvaluation.image}
+                    alt="Canvas Tile Render"
+                    className="object-cover w-full h-full transition-all duration-500 ease-out"
                     style={{
-                      filter: activeRuleMatch?.tint && activeRuleMatch.tint !== "None" ? `drop-shadow(0 0 15px ${activeRuleMatch.tint})` : 'none',
-                      borderColor: activeRuleMatch?.tint || 'transparent',
-                      opacity: activeRuleMatch?.alpha ?? 1.0,
-                      transform: `scale(${activeRuleMatch?.scale ?? 1.0})`
+                      filter: tileEvaluation.tint ? `drop-shadow(0 0 20px ${tileEvaluation.tint})` : 'none',
+                      opacity: tileEvaluation.alpha,
+                      transform: `scale(${tileEvaluation.scale})`
                     }}
                   />
 
-                  {/* Overlay Status Badge on Tile */}
-                  <div className="absolute top-3 left-3 bg-slate-950/90 border border-slate-700 backdrop-blur px-3 py-1.5 rounded-md text-xs font-medium space-y-0.5">
-                    <div className="text-slate-400 text-[10px] uppercase tracking-wider">Applied Rule</div>
-                    <div className="text-red-400 font-bold">{activeRuleMatch ? activeRuleMatch.name : "Default Base Texture"}</div>
+                  {/* Tile Active Trigger Overlay Badge */}
+                  <div className="absolute top-3 left-3 bg-slate-900/90 border border-slate-700 backdrop-blur rounded-md px-3 py-1.5 text-xs flex items-center space-x-2 shadow-lg">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    <span className="font-semibold text-slate-200">{tileEvaluation.matchedName}</span>
                   </div>
 
-                  {/* Canvas Tile HUD Button Overlay Mock */}
-                  <div className="absolute bottom-3 right-3 bg-red-950/80 border border-red-600 backdrop-blur p-2 rounded-md shadow-lg flex items-center space-x-2 text-xs text-red-200">
-                    <Flame className="w-4 h-4 text-red-500" />
-                    <span>WoD5e Tile HUD Active</span>
-                  </div>
-                </div>
-
-                {/* Applied Properties Summary */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1">
-                  <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                    <span className="text-slate-500 block text-[10px] uppercase">Texture Src</span>
-                    <span className="font-mono text-slate-300 truncate block">
-                      {activeRuleMatch ? activeRuleMatch.imageLabel : "tiles/haven_normal.webp"}
-                    </span>
-                  </div>
-                  <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                    <span className="text-slate-500 block text-[10px] uppercase">Tint Hex</span>
-                    <span className="font-mono text-red-400 font-bold block">
-                      {activeRuleMatch?.tint || "#ffffff"}
-                    </span>
-                  </div>
-                  <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                    <span className="text-slate-500 block text-[10px] uppercase">Opacity Alpha</span>
-                    <span className="font-mono text-amber-400 font-bold block">
-                      {activeRuleMatch?.alpha ?? 1.0}
-                    </span>
-                  </div>
-                  <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                    <span className="text-slate-500 block text-[10px] uppercase">Scale Multiplier</span>
-                    <span className="font-mono text-purple-400 font-bold block">
-                      {activeRuleMatch?.scale ?? 1.0}x
-                    </span>
+                  <div className="absolute bottom-3 right-3 bg-slate-900/90 border border-slate-700 backdrop-blur rounded-md px-3 py-1 text-[11px] text-slate-400">
+                    Source: <span className="text-teal-300 font-medium">{tileEvaluation.type}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Reactive Event Execution Log */}
-              <div className="bg-slate-900 rounded-xl border border-slate-800 p-5 space-y-3 shadow-xl">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                  <h3 className="font-serif font-bold text-sm text-slate-200 flex items-center gap-2">
-                    <Zap className="w-4 h-4 text-amber-400" />
-                    Foundry Event Log (<code className="text-xs text-slate-400">updateActor</code>)
-                  </h3>
-                  <button
-                    onClick={() => setSimulatedLog([])}
-                    className="text-xs text-slate-500 hover:text-slate-300 transition"
-                  >
-                    Clear Log
-                  </button>
+              {/* Reactive Console Event Log */}
+              <div className="bg-slate-900 rounded-xl border border-slate-800 p-4 space-y-3 shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2 text-xs font-semibold text-slate-400">
+                  <span className="flex items-center space-x-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 text-teal-400" />
+                    <span>Foundry VTT System Log (F12 Hook Debug)</span>
+                  </span>
+                  <span>{simulatedLog.length} updates</span>
                 </div>
 
-                <div className="space-y-1.5 max-h-48 overflow-y-auto font-mono text-xs">
+                <div className="font-mono text-xs space-y-1.5 max-h-48 overflow-y-auto pr-2">
                   {simulatedLog.map((log) => (
-                    <div
-                      key={log.id}
-                      className="bg-slate-950/80 p-2 rounded border border-slate-800/80 flex items-center justify-between text-slate-300"
-                    >
+                    <div key={log.id} className="bg-slate-950/80 p-2 rounded border border-slate-800 flex items-center justify-between text-slate-300">
                       <div className="flex items-center space-x-2">
-                        <span className="text-slate-500 text-[10px]">{log.time}</span>
-                        <span className="text-red-400 font-bold">[{log.actor}]</span>
-                        <span>➔ Rule matched: <strong className="text-slate-100">{log.matchedRule}</strong></span>
+                        <span className="text-slate-500">[{log.time}]</span>
+                        <span className="text-red-400 font-semibold">{log.actor}</span>
+                        <span className="text-slate-400">&rarr;</span>
+                        <span className="text-teal-300 font-bold">{log.matchedRule}</span>
                       </div>
-                      <div className="text-[10px] text-slate-400 bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
-                        {log.healthState} | {log.hungerState}
-                      </div>
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                        {log.hungerState}
+                      </span>
                     </div>
                   ))}
                 </div>
               </div>
 
             </div>
+
           </div>
         )}
 
-        {/* 2. CONDITION RULES MATRIX */}
-        {activeTab === "rules" && (
+        {/* 2. STAT LEVEL IMAGE MAPPING MATRIX TAB */}
+        {activeTab === "statmap" && (
           <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 space-y-6 shadow-xl">
-            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <div>
-                <h2 className="font-serif font-bold text-xl text-slate-100">
-                  Condition Priority Rules Matrix
+                <h2 className="font-serif font-bold text-xl text-teal-300 flex items-center gap-2">
+                  <Layers className="w-6 h-6 text-teal-400" />
+                  Specific Images per Stat Level (Level Map)
                 </h2>
-                <p className="text-xs text-slate-400">
-                  Rules are evaluated top-to-bottom on the Tile. The first matching condition updates the canvas tile image.
+                <p className="text-xs text-slate-400 mt-1">
+                  Assign a unique tile image file for each possible value of Hunger (0, 1, 2, 3, 4, 5) or Health state.
                 </p>
               </div>
 
-              <button
-                onClick={() => {
-                  const newRule = {
-                    id: `rule_${Date.now()}`,
-                    name: `New Custom Rule #${rules.length + 1}`,
-                    enabled: true,
-                    conditionType: "hunger_gte",
-                    value: 4,
-                    image: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=600&q=80",
-                    imageLabel: "Custom Rule Image",
-                    tint: "#dc2626",
-                    alpha: 1.0,
-                    scale: 1.0,
-                    description: "Triggers when Hunger is 4 or higher"
-                  };
-                  setRules([...rules, newRule]);
-                }}
-                className="flex items-center space-x-1.5 px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white rounded text-xs font-semibold shadow transition"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add New Rule</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs text-slate-400">Select Stat:</span>
+                <select
+                  value={statMapType}
+                  onChange={(e) => setStatMapType(e.target.value)}
+                  className="bg-slate-950 border border-slate-700 text-teal-300 text-xs rounded-md px-3 py-1.5 focus:outline-none focus:border-teal-500 font-medium"
+                >
+                  <option value="hunger">Hunger / Rage / Desperation (0 to 5)</option>
+                  <option value="health_agg">Aggravated Health Damage (0 to 10)</option>
+                  <option value="health_remaining">Remaining Health Points (0 to 10)</option>
+                </select>
+              </div>
             </div>
 
-            {/* Rules Cards List */}
-            <div className="space-y-4">
-              {rules.map((rule, index) => (
-                <div
-                  key={rule.id}
-                  className={`p-4 rounded-lg border transition ${
-                    rule.enabled
-                      ? "bg-slate-950 border-slate-800 hover:border-red-900/60"
-                      : "bg-slate-950/40 border-slate-800/40 opacity-60"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-                    <div className="flex items-center space-x-3">
-                      <input
-                        type="checkbox"
-                        checked={rule.enabled}
-                        onChange={(e) => {
-                          const updated = [...rules];
-                          updated[index].enabled = e.target.checked;
-                          setRules(updated);
-                        }}
-                        className="w-4 h-4 accent-red-600 cursor-pointer"
-                      />
-                      <span className="font-mono text-xs text-red-500 font-bold">Priority #{index + 1}</span>
-                      <input
-                        type="text"
-                        value={rule.name}
-                        onChange={(e) => {
-                          const updated = [...rules];
-                          updated[index].name = e.target.value;
-                          setRules(updated);
-                        }}
-                        className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm font-bold text-slate-200 focus:outline-none focus:border-red-500"
-                      />
-                    </div>
-
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => {
-                          if (index === 0) return;
-                          const updated = [...rules];
-                          const temp = updated[index];
-                          updated[index] = updated[index - 1];
-                          updated[index - 1] = temp;
-                          setRules(updated);
-                        }}
-                        disabled={index === 0}
-                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded text-xs text-slate-300"
-                      >
-                        ▲ Up
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (index === rules.length - 1) return;
-                          const updated = [...rules];
-                          const temp = updated[index];
-                          updated[index] = updated[index + 1];
-                          updated[index + 1] = temp;
-                          setRules(updated);
-                        }}
-                        disabled={index === rules.length - 1}
-                        className="px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded text-xs text-slate-300"
-                      >
-                        ▼ Down
-                      </button>
-                      <button
-                        onClick={() => {
-                          setRules(rules.filter((_, i) => i !== index));
-                        }}
-                        className="p-1.5 text-slate-500 hover:text-red-400 transition"
-                        title="Delete Rule"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
+            {/* Level Inputs Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[0, 1, 2, 3, 4, 5].map((lvl) => (
+                <div key={lvl} className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-teal-400 px-2.5 py-1 rounded bg-teal-950/80 border border-teal-800">
+                      Level {lvl} {lvl === 0 ? "(Satisfied)" : lvl === 5 ? "(Bestial)" : ""}
+                    </span>
+                    <span className="text-[11px] text-slate-500">Hunger = {lvl}</span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-                    <div>
-                      <label className="block text-slate-400 mb-1">Condition Trigger</label>
-                      <select
-                        value={rule.conditionType}
-                        onChange={(e) => {
-                          const updated = [...rules];
-                          updated[index].conditionType = e.target.value;
-                          setRules(updated);
-                        }}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200"
-                      >
-                        <option value="health_torpor">Health: Torpor / Incapacitated</option>
-                        <option value="health_aggravated">Health: Aggravated Damage ≥</option>
-                        <option value="health_superficial">Health: Superficial Damage ≥</option>
-                        <option value="health_impaired">Health: Impaired Status</option>
-                        <option value="hunger_equals">Hunger / Rage Level ==</option>
-                        <option value="hunger_gte">Hunger / Rage Level ≥</option>
-                        <option value="willpower_impaired">Willpower: Impaired</option>
-                      </select>
-                    </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-400 mb-1">Image URL / Path</label>
+                    <input
+                      type="text"
+                      value={hungerLevelImages[String(lvl)] || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setHungerLevelImages(prev => ({ ...prev, [String(lvl)]: val }));
+                      }}
+                      className="w-full bg-slate-900 border border-slate-700 text-xs rounded px-2.5 py-1.5 text-slate-200 focus:border-teal-500"
+                    />
+                  </div>
 
-                    <div>
-                      <label className="block text-slate-400 mb-1">Condition Value</label>
-                      <input
-                        type="number"
-                        value={rule.value}
-                        onChange={(e) => {
-                          const updated = [...rules];
-                          updated[index].value = Number(e.target.value);
-                          setRules(updated);
-                        }}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-slate-400 mb-1">Tint Color (Hex)</label>
-                      <input
-                        type="text"
-                        value={rule.tint}
-                        onChange={(e) => {
-                          const updated = [...rules];
-                          updated[index].tint = e.target.value;
-                          setRules(updated);
-                        }}
-                        className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 font-mono"
-                      />
-                    </div>
+                  {/* Preview Thumbnail */}
+                  <div className="h-28 rounded overflow-hidden border border-slate-800 bg-slate-900 flex items-center justify-center">
+                    {hungerLevelImages[String(lvl)] ? (
+                      <img src={hungerLevelImages[String(lvl)]} alt={`Level ${lvl}`} className="object-cover w-full h-full" />
+                    ) : (
+                      <span className="text-xs text-slate-600 font-italic">No image assigned</span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1637,144 +1073,132 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. MODULE SOURCE INSPECTOR */}
-        {activeTab === "package" && (
+        {/* 3. CONDITION RULES MATRIX TAB */}
+        {activeTab === "rules" && (
           <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 space-y-6 shadow-xl">
-            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
               <div>
-                <h2 className="font-serif font-bold text-xl text-slate-100">
-                  Module Manifest & Source Code Inspector
+                <h2 className="font-serif font-bold text-xl text-red-100 flex items-center gap-2">
+                  <Sliders className="w-6 h-6 text-red-400" />
+                  Priority Condition Rules Matrix
                 </h2>
-                <p className="text-xs text-slate-400">
-                  Inspect the physical ES Module code generated for Foundry VTT v14 and WoD5e 5.3.28
+                <p className="text-xs text-slate-400 mt-1">
+                  Rules are evaluated top-to-bottom as fallback logic.
                 </p>
               </div>
 
               <button
-                onClick={handleDownloadZip}
-                disabled={isDownloading}
-                className="flex items-center space-x-2 px-3.5 py-1.5 bg-red-700 hover:bg-red-600 text-white rounded text-xs font-semibold shadow transition"
+                onClick={() => {
+                  const newRule = {
+                    id: `rule_${Date.now()}`,
+                    name: `Custom Rule #${rules.length + 1}`,
+                    enabled: true,
+                    conditionType: "hunger_gte",
+                    value: 4,
+                    image: DEFAULT_HUNGER_LEVEL_MAP["4"],
+                    imageLabel: "Custom Rule Image",
+                    tint: "#dc2626",
+                    alpha: 1.0,
+                    scale: 1.0,
+                    description: "Custom user-defined condition rule"
+                  };
+                  setRules([...rules, newRule]);
+                }}
+                className="flex items-center space-x-2 px-3 py-1.5 rounded-md bg-red-700 hover:bg-red-600 text-xs font-semibold text-white transition border border-red-500"
               >
-                <Download className="w-4 h-4" />
-                <span>{isDownloading ? "Zipping..." : "Download Zip"}</span>
+                <Plus className="w-4 h-4" />
+                <span>Add Rule</span>
               </button>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* File List */}
-              <div className="lg:col-span-4 bg-slate-950 p-3 rounded-lg border border-slate-800 space-y-1">
-                <div className="text-xs font-semibold text-slate-400 px-2 py-1 uppercase tracking-wider">
-                  Module File Tree
-                </div>
-                {filesList.map((file, idx) => {
-                  const Icon = file.icon;
-                  return (
+            {/* Rules Cards List */}
+            <div className="space-y-4">
+              {rules.map((rule, idx) => (
+                <div key={rule.id} className="bg-slate-950 p-4 rounded-lg border border-slate-800 flex flex-wrap lg:flex-nowrap items-center justify-between gap-4">
+                  <div className="flex items-center space-x-3">
+                    <span className="w-7 h-7 rounded-full bg-red-950 text-red-400 border border-red-800 font-bold text-xs flex items-center justify-center">
+                      #{idx + 1}
+                    </span>
+                    <div>
+                      <h4 className="font-semibold text-sm text-slate-200">{rule.name}</h4>
+                      <p className="text-xs text-slate-400">{rule.description}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-3">
+                    <input
+                      type="text"
+                      value={rule.image}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setRules(rules.map(r => r.id === rule.id ? { ...r, image: val } : r));
+                      }}
+                      className="bg-slate-900 border border-slate-700 text-xs rounded px-2 py-1 text-slate-200 w-64"
+                    />
+
                     <button
-                      key={file.path}
-                      onClick={() => setSelectedFileIndex(idx)}
-                      className={`w-full flex items-center space-x-2.5 px-3 py-2 rounded-md text-xs transition ${
-                        selectedFileIndex === idx
-                          ? "bg-red-950/80 text-red-300 border border-red-800 font-bold"
-                          : "text-slate-400 hover:bg-slate-900 hover:text-slate-200"
-                      }`}
+                      onClick={() => setRules(rules.filter(r => r.id !== rule.id))}
+                      className="p-1.5 rounded bg-slate-900 text-red-400 hover:bg-red-950 border border-slate-800 transition"
                     >
-                      <Icon className="w-4 h-4 text-red-400" />
-                      <span className="font-mono truncate">{file.name}</span>
+                      <Trash2 className="w-4 h-4" />
                     </button>
-                  );
-                })}
-              </div>
-
-              {/* Code Viewer */}
-              <div className="lg:col-span-8 bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                  <span className="font-mono text-xs text-red-400 font-bold">
-                    {filesList[selectedFileIndex].path}
-                  </span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(filesList[selectedFileIndex].content);
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 2000);
-                    }}
-                    className="flex items-center space-x-1 text-xs text-slate-400 hover:text-slate-200 transition"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy Code</span>
-                  </button>
+                  </div>
                 </div>
-
-                <pre className="font-mono text-xs text-slate-300 max-h-96 overflow-y-auto p-3 bg-slate-900 rounded border border-slate-800 leading-relaxed">
-                  {filesList[selectedFileIndex].content}
-                </pre>
-              </div>
+              ))}
             </div>
           </div>
         )}
 
-        {/* 4. FOUNDRY VTT SETUP GUIDE */}
-        {activeTab === "docs" && (
-          <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 space-y-6 shadow-xl text-slate-200 leading-relaxed">
-            <div className="border-b border-slate-800 pb-4">
-              <h2 className="font-serif font-bold text-2xl text-red-100">
-                Foundry VTT v14 Installation & Access Guide
-              </h2>
-              <p className="text-sm text-slate-400 mt-1">
-                How to install and configure the WoD5e Dynamic Tile Tracker in your world.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-slate-950 p-5 rounded-lg border border-slate-800 space-y-2">
-                <div className="w-8 h-8 rounded bg-red-950 border border-red-800 flex items-center justify-center text-red-400 font-bold text-sm">
-                  1
-                </div>
-                <h3 className="font-serif font-bold text-slate-100">Step 1: Download & Extract</h3>
-                <p className="text-xs text-slate-400">
-                  Download <code className="text-red-400">wod5e-dynamic-tile-tracker-v14.zip</code> and extract it to your Foundry User Data path:
-                </p>
-                <div className="bg-slate-900 p-2 rounded text-[11px] font-mono text-amber-300 border border-slate-800">
-                  Data/modules/wod5e-dynamic-tile-tracker/
-                </div>
-              </div>
-
-              <div className="bg-slate-950 p-5 rounded-lg border border-slate-800 space-y-2">
-                <div className="w-8 h-8 rounded bg-red-950 border border-red-800 flex items-center justify-center text-red-400 font-bold text-sm">
-                  2
-                </div>
-                <h3 className="font-serif font-bold text-slate-100">Step 2: Enable Module in World</h3>
-                <p className="text-xs text-slate-400">
-                  Launch Foundry VTT v14, open your World of Darkness 5e world, open <strong>Manage Modules</strong>, and check <strong>World of Darkness 5e - Dynamic Tile Tracker</strong>.
-                </p>
-              </div>
-
-              <div className="bg-slate-950 p-5 rounded-lg border border-slate-800 space-y-2">
-                <div className="w-8 h-8 rounded bg-red-950 border border-red-800 flex items-center justify-center text-red-400 font-bold text-sm">
-                  3
-                </div>
-                <h3 className="font-serif font-bold text-slate-100">Step 3: Access WoD5e Tracker Tab</h3>
-                <p className="text-xs text-slate-400">
-                  Double-click any Tile on the canvas. In the Tile Sheet, click the new <strong>WoD5e Tracker</strong> tab on the right side of the navigation header.
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-slate-950 p-5 rounded-lg border border-red-900/60 space-y-3">
-              <h3 className="font-serif font-bold text-lg text-red-300 flex items-center gap-2">
-                <AlertTriangle className="w-5 h-5 text-amber-400" />
-                Where to find the "WoD5e Tracker" tab in Foundry VTT
+        {/* 4. MODULE SOURCE INSPECTOR TAB */}
+        {activeTab === "package" && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-4 bg-slate-900 rounded-xl border border-slate-800 p-4 space-y-2">
+              <h3 className="font-serif font-bold text-sm text-slate-200 mb-3 border-b border-slate-800 pb-2">
+                Module Directory Files
               </h3>
-              <p className="text-xs text-slate-300">
-                When you double-click or edit a Tile on the canvas, Foundry VTT opens the <strong>Tile Configuration Sheet</strong>. Across the top navigation bar (where <em>Basic</em>, <em>Animation</em>, and <em>Overhead</em> are located), our module automatically injects the <strong className="text-red-400">WoD5e Tracker</strong> tab tab with a crimson droplet icon.
-              </p>
-              <p className="text-xs text-slate-400">
-                If you do not see the tab, verify that:
-              </p>
-              <ul className="list-disc list-inside text-xs text-slate-400 space-y-1">
-                <li>The module is enabled under <strong>Game Settings ➔ Manage Modules</strong>.</li>
-                <li>The module directory is named exactly <code className="text-red-400">wod5e-dynamic-tile-tracker</code> under <code className="text-slate-300">Data/modules/</code>.</li>
-                <li>Your world system is set to World of Darkness 5e (v5.3.28 or compatible v5.3+).</li>
-              </ul>
+              {filesList.map((f, idx) => {
+                const Icon = f.icon;
+                return (
+                  <button
+                    key={f.path}
+                    onClick={() => setSelectedFileIndex(idx)}
+                    className={`w-full flex items-center space-x-2 px-3 py-2 rounded-md text-xs font-mono transition text-left ${
+                      selectedFileIndex === idx ? "bg-red-950/80 text-red-200 border border-red-800 font-semibold" : "text-slate-400 hover:bg-slate-800"
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 text-red-400 shrink-0" />
+                    <span className="truncate">{f.path}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="lg:col-span-8 bg-slate-900 rounded-xl border border-slate-800 p-4 font-mono text-xs overflow-x-auto bg-slate-950 text-slate-200 max-h-[600px] overflow-y-auto">
+              <pre>{filesList[selectedFileIndex].content}</pre>
+            </div>
+          </div>
+        )}
+
+        {/* 5. SETUP GUIDE TAB */}
+        {activeTab === "docs" && (
+          <div className="bg-slate-900 rounded-xl border border-slate-800 p-6 space-y-6 shadow-xl">
+            <h2 className="font-serif font-bold text-xl text-red-100 border-b border-slate-800 pb-3">
+              Foundry VTT v14 Installation & Usage Guide
+            </h2>
+
+            <div className="space-y-4 text-sm text-slate-300">
+              <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-2">
+                <h3 className="font-bold text-red-400">1. Install Module Folder</h3>
+                <p>Extract the downloaded ZIP into your Foundry data folder:</p>
+                <code className="block bg-slate-900 p-2 rounded text-xs font-mono text-amber-300">
+                  Data/modules/wod5e-dynamic-tile-tracker/
+                </code>
+              </div>
+
+              <div className="bg-slate-950 p-4 rounded-lg border border-slate-800 space-y-2">
+                <h3 className="font-bold text-red-400">2. Configure Tile</h3>
+                <p>Open any tile on canvas and select the <strong>WoD5e Tracker</strong> tab to set your actor & image map.</p>
+              </div>
             </div>
           </div>
         )}
@@ -1784,7 +1208,6 @@ export default function App() {
   );
 }
 
-// React 18 Root Render
 const container = document.getElementById("root");
 if (container) {
   const root = createRoot(container);

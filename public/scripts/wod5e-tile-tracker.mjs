@@ -30,7 +30,7 @@ export class WoD5eTileTrackerEngine {
   }
 
   /**
-   * Evaluates rules against actor state and updates tile texture / appearance
+   * Evaluates level mappings and rules against actor state and updates tile texture / appearance
    */
   static async evaluateTile(tileDoc, actorOverride = null) {
     const config = tileDoc.getFlag(this.MODULE_ID, "config");
@@ -42,23 +42,42 @@ export class WoD5eTileTrackerEngine {
     // Compute WoD5e Actor Tracker Stats (5.3.28 Data Structure)
     const stats = this.extractWoD5eStats(actor);
 
-    // Default target image is base texture or configured fallback
+    let targetSrc = null;
+    let targetTint = null;
+    let targetAlpha = null;
+    let targetScale = null;
     let matchedRule = null;
-    const rules = config.rules || [];
 
-    // Evaluate rules in order of priority (first matching rule wins)
-    for (const rule of rules) {
-      if (this.checkRuleMatch(rule, stats)) {
-        matchedRule = rule;
-        break;
+    // 1. Check Specific Stat Level Mapping (e.g. Exact image set for each Hunger 0..5 or Health state)
+    if (config.statMap?.enabled && config.statMap?.statType) {
+      const levelImage = this.getStatLevelImage(config.statMap, stats);
+      if (levelImage) {
+        targetSrc = levelImage;
       }
     }
 
-    // Determine target properties
-    const targetSrc = matchedRule?.image || config.defaultImage || tileDoc.texture.src;
-    const targetTint = matchedRule?.tint || config.defaultTint || null;
-    const targetAlpha = matchedRule?.alpha ?? config.defaultAlpha ?? 1.0;
-    const targetScale = matchedRule?.scale ?? config.defaultScale ?? 1.0;
+    // 2. Fall back to Priority Conditional Rules if no stat map image matched or stat map disabled
+    if (!targetSrc && config.rules && config.rules.length > 0) {
+      for (const rule of config.rules) {
+        if (this.checkRuleMatch(rule, stats)) {
+          matchedRule = rule;
+          targetSrc = rule.image;
+          targetTint = rule.tint || null;
+          targetAlpha = rule.alpha ?? null;
+          targetScale = rule.scale ?? null;
+          break;
+        }
+      }
+    }
+
+    // 3. Fallback to default / base tile image
+    if (!targetSrc) {
+      targetSrc = config.defaultImage || tileDoc.texture.src;
+    }
+
+    targetTint = targetTint || config.defaultTint || null;
+    targetAlpha = targetAlpha ?? config.defaultAlpha ?? 1.0;
+    targetScale = targetScale ?? config.defaultScale ?? 1.0;
 
     // Prepare update payload for Foundry VTT v14 Tile Document
     const updates = {
@@ -75,12 +94,55 @@ export class WoD5eTileTrackerEngine {
     const currentSrc = tileDoc.texture.src;
     const currentTint = tileDoc.texture.tint;
 
-    if (currentSrc !== targetSrc || currentTint !== targetTint || tileDoc.alpha !== targetAlpha) {
+    if (currentSrc !== targetSrc || currentTint !== targetTint || tileDoc.alpha !== targetAlpha || tileDoc.scaleX !== targetScale) {
       if (game.settings.get(this.MODULE_ID, "enableDebug")) {
-        console.log(`WoD5e Tile Tracker | Updating Tile ${tileDoc.id} for Actor ${actor.name}:`, updates, matchedRule);
+        console.log(`WoD5e Tile Tracker | Updating Tile ${tileDoc.id} for Actor ${actor.name}:`, updates, { matchedRule, statMap: config.statMap });
       }
       await tileDoc.update(updates);
     }
+  }
+
+  /**
+   * Retrieves specific image assigned to the actor's current level for the mapped stat
+   */
+  static getStatLevelImage(statMap, stats) {
+    if (!statMap || !statMap.levels) return null;
+
+    const statType = statMap.statType;
+    let currentVal = 0;
+
+    switch (statType) {
+      case "hunger":
+        currentVal = stats.hungerVal;
+        break;
+      case "health_agg":
+        currentVal = stats.healthAgg;
+        break;
+      case "health_sup":
+        currentVal = stats.healthSup;
+        break;
+      case "health_total":
+        currentVal = stats.totalHealthDamage;
+        break;
+      case "health_remaining":
+        currentVal = Math.max(0, stats.healthMax - stats.totalHealthDamage);
+        break;
+      case "willpower_agg":
+        currentVal = stats.wpAgg;
+        break;
+      case "willpower_sup":
+        currentVal = stats.wpSup;
+        break;
+      case "willpower_total":
+        currentVal = stats.totalWpDamage;
+        break;
+      default:
+        currentVal = 0;
+    }
+
+    // Return the image configured for this specific numeric level
+    const img = statMap.levels[currentVal] || statMap.levels[String(currentVal)];
+    return img && img.trim().length > 0 ? img.trim() : null;
   }
 
   /**
@@ -134,19 +196,24 @@ export class WoD5eTileTrackerEngine {
   static checkRuleMatch(rule, stats) {
     if (!rule || !rule.enabled) return false;
 
-    // Condition 1: Health Threshold / Status
+    // Health Exact Value or Threshold
+    if ((rule.conditionType === "health_agg_equals" || rule.conditionType === "health_aggravated_exact") && stats.healthAgg !== rule.value) return false;
     if (rule.conditionType === "health_aggravated" && stats.healthAgg < rule.value) return false;
+    if ((rule.conditionType === "health_sup_equals" || rule.conditionType === "health_superficial_exact") && stats.healthSup !== rule.value) return false;
     if (rule.conditionType === "health_superficial" && stats.healthSup < rule.value) return false;
+    if ((rule.conditionType === "health_total_equals" || rule.conditionType === "health_total_exact") && stats.totalHealthDamage !== rule.value) return false;
     if (rule.conditionType === "health_percent_below" && stats.healthPercent > rule.value) return false;
     if (rule.conditionType === "health_torpor" && !stats.isTorpor) return false;
     if (rule.conditionType === "health_impaired" && !stats.isHealthImpaired) return false;
 
-    // Condition 2: Willpower Threshold
+    // Willpower Exact Value or Threshold
+    if ((rule.conditionType === "willpower_agg_equals" || rule.conditionType === "willpower_aggravated_exact") && stats.wpAgg !== rule.value) return false;
     if (rule.conditionType === "willpower_aggravated" && stats.wpAgg < rule.value) return false;
+    if ((rule.conditionType === "willpower_total_equals" || rule.conditionType === "willpower_total_exact") && stats.totalWpDamage !== rule.value) return false;
     if (rule.conditionType === "willpower_impaired" && !stats.isWpImpaired) return false;
 
-    // Condition 3: Hunger / Rage Value
-    if (rule.conditionType === "hunger_equals" && stats.hungerVal !== rule.value) return false;
+    // Hunger / Rage Value Exact or Threshold
+    if ((rule.conditionType === "hunger_equals" || rule.conditionType === "hunger_exact") && stats.hungerVal !== rule.value) return false;
     if (rule.conditionType === "hunger_gte" && stats.hungerVal < rule.value) return false;
 
     // Combined Rule Checks
