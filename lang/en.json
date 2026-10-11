@@ -1,0 +1,18 @@
+{
+  "WOD5E_TILE": {
+    "Title": "WoD5e Dynamic Tile Tracker",
+    "SettingsEnableDebug": "Enable Debug Logging",
+    "SettingsEnableDebugHint": "Prints rule matches and tile update payloads to F12 Console.",
+    "SettingsUpdateDebounce": "Tile Refresh Debounce (ms)",
+    "SettingsUpdateDebounceHint": "Time in milliseconds to wait before triggering canvas tile redraws during fast slider drags.",
+    "TabTitle": "WoD5e Tracker",
+    "EnableTracker": "Enable WoD5e Real-Time Tile Updates",
+    "SelectActor": "Target WoD5e Actor",
+    "RulesHeader": "Condition Priority Rules Matrix",
+    "ConditionHealthAggravated": "Aggravated Health Damage ≥",
+    "ConditionHealthSuperficial": "Superficial Health Damage ≥",
+    "ConditionHealthTorpor": "Actor in Torpor / Incapacitated",
+    "ConditionHungerGte": "Hunger / Rage Level ≥",
+    "ConditionWillpowerImpaired": "Willpower Impaired"
+  }
+}
