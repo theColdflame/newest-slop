@@ -10,7 +10,7 @@ export class WoD5eTileTrackerEngine {
   }
 
   /**
-   * Main listener when actor tracker values (Health, Willpower, Hunger) change
+   * Main listener when actor tracker values (Health, Willpower, Hunger, Frenzy) change
    */
   static onActorTrackerUpdated(actor) {
     if (!actor) return;
@@ -46,38 +46,66 @@ export class WoD5eTileTrackerEngine {
     let targetTint = null;
     let targetAlpha = null;
     let targetScale = null;
+    let targetHidden = null;
     let matchedRule = null;
 
-    // 1. Check Specific Stat Level Mapping (e.g. Exact image set for each Hunger 0..5 or Health state)
+    // Helper to test if image represents hidden/no visual tile
+    const isNoTileVal = (val) => {
+      if (val === undefined || val === null) return false;
+      const s = String(val).trim().toLowerCase();
+      return s === "__none__" || s === "none" || s === "hidden" || s === "invisible";
+    };
+
+    // 1. Check Specific Stat Level Mapping
     if (config.statMap?.enabled && config.statMap?.statType) {
       const levelImage = this.getStatLevelImage(config.statMap, stats);
-      if (levelImage) {
-        targetSrc = levelImage;
+      if (levelImage !== null) {
+        if (isNoTileVal(levelImage)) {
+          targetSrc = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%2F%3E";
+          targetAlpha = 0;
+          targetHidden = true;
+        } else {
+          targetSrc = levelImage;
+        }
       }
     }
 
-    // 2. Fall back to Priority Conditional Rules if no stat map image matched or stat map disabled
-    if (!targetSrc && config.rules && config.rules.length > 0) {
+    // 2. Priority Conditional Rules (if no level map match or level map disabled)
+    if (targetSrc === null && targetHidden !== true && config.rules && config.rules.length > 0) {
       for (const rule of config.rules) {
         if (this.checkRuleMatch(rule, stats)) {
           matchedRule = rule;
-          targetSrc = rule.image;
-          targetTint = rule.tint || null;
-          targetAlpha = rule.alpha ?? null;
-          targetScale = rule.scale ?? null;
+          if (rule.hideTile || isNoTileVal(rule.image)) {
+            targetSrc = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%2F%3E";
+            targetAlpha = 0;
+            targetHidden = true;
+          } else {
+            targetSrc = rule.image;
+            targetTint = rule.tint || null;
+            targetAlpha = rule.alpha ?? null;
+            targetScale = rule.scale ?? null;
+            targetHidden = false;
+          }
           break;
         }
       }
     }
 
     // 3. Fallback to default / base tile image
-    if (!targetSrc) {
-      targetSrc = config.defaultImage || tileDoc.texture.src;
+    if (targetSrc === null && targetHidden !== true) {
+      if (config.defaultHide || isNoTileVal(config.defaultImage)) {
+        targetSrc = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%2F%3E";
+        targetAlpha = 0;
+        targetHidden = true;
+      } else {
+        targetSrc = config.defaultImage || tileDoc.texture.src;
+      }
     }
 
     targetTint = targetTint || config.defaultTint || null;
-    targetAlpha = targetAlpha ?? config.defaultAlpha ?? 1.0;
+    targetAlpha = targetAlpha ?? (targetHidden ? 0 : (config.defaultAlpha ?? 1.0));
     targetScale = targetScale ?? config.defaultScale ?? 1.0;
+    targetHidden = targetHidden ?? false;
 
     // Prepare update payload for Foundry VTT v14 Tile Document
     const updates = {
@@ -87,14 +115,15 @@ export class WoD5eTileTrackerEngine {
       },
       alpha: targetAlpha,
       scaleX: targetScale,
-      scaleY: targetScale
+      scaleY: targetScale,
+      hidden: targetHidden
     };
 
-    // Apply smooth tile update if texture or parameters changed
+    // Apply tile update if parameters changed
     const currentSrc = tileDoc.texture.src;
     const currentTint = tileDoc.texture.tint;
 
-    if (currentSrc !== targetSrc || currentTint !== targetTint || tileDoc.alpha !== targetAlpha || tileDoc.scaleX !== targetScale) {
+    if (currentSrc !== targetSrc || currentTint !== targetTint || tileDoc.alpha !== targetAlpha || tileDoc.hidden !== targetHidden || tileDoc.scaleX !== targetScale) {
       if (game.settings.get(this.MODULE_ID, "enableDebug")) {
         console.log(`WoD5e Tile Tracker | Updating Tile ${tileDoc.id} for Actor ${actor.name}:`, updates, { matchedRule, statMap: config.statMap });
       }
@@ -114,6 +143,9 @@ export class WoD5eTileTrackerEngine {
     switch (statType) {
       case "hunger":
         currentVal = stats.hungerVal;
+        break;
+      case "frenzy":
+        currentVal = stats.isFrenzied ? 1 : 0;
         break;
       case "health_agg":
         currentVal = stats.healthAgg;
@@ -140,13 +172,13 @@ export class WoD5eTileTrackerEngine {
         currentVal = 0;
     }
 
-    // Return the image configured for this specific numeric level
-    const img = statMap.levels[currentVal] || statMap.levels[String(currentVal)];
-    return img && img.trim().length > 0 ? img.trim() : null;
+    const img = statMap.levels[currentVal] ?? statMap.levels[String(currentVal)];
+    if (img === undefined || img === null) return null;
+    return String(img).trim();
   }
 
   /**
-   * Extract Health, Willpower, Hunger, Rage trackers according to WoD5e 5.3.28 system schema
+   * Extract Health, Willpower, Hunger, Frenzy trackers according to WoD5e 5.3.28 system schema
    */
   static extractWoD5eStats(actor) {
     const sys = actor.system || {};
@@ -173,6 +205,21 @@ export class WoD5eTileTrackerEngine {
     // Hunger / Rage / Desperation
     const hungerVal = Number(sys.hunger?.value ?? sys.rage?.value ?? sys.desperation?.value ?? 0);
 
+    // Frenzy State (WoD5e 5.3.28 system schema & active effect statuses)
+    const isFrenzied = Boolean(
+      sys.frenzy?.active ||
+      sys.frenzy?.value ||
+      sys.frenzy === true ||
+      sys.isFrenzied ||
+      (actor.statuses && (actor.statuses.has("frenzy") || actor.statuses.has("frenzied"))) ||
+      (actor.effects && actor.effects.some(e => !e.disabled && (
+        e.name?.toLowerCase().includes("frenzy") ||
+        e.label?.toLowerCase().includes("frenzy") ||
+        (e.statuses && (e.statuses.has("frenzy") || e.statuses.has("frenzied")))
+      )))
+    );
+    const frenzyVal = isFrenzied ? 1 : 0;
+
     return {
       healthMax,
       healthAgg,
@@ -186,7 +233,9 @@ export class WoD5eTileTrackerEngine {
       wpSup,
       totalWpDamage,
       isWpImpaired,
-      hungerVal
+      hungerVal,
+      isFrenzied,
+      frenzyVal
     };
   }
 
@@ -197,28 +246,35 @@ export class WoD5eTileTrackerEngine {
     if (!rule || !rule.enabled) return false;
 
     // Health Exact Value or Threshold
-    if ((rule.conditionType === "health_agg_equals" || rule.conditionType === "health_aggravated_exact") && stats.healthAgg !== rule.value) return false;
-    if (rule.conditionType === "health_aggravated" && stats.healthAgg < rule.value) return false;
-    if ((rule.conditionType === "health_sup_equals" || rule.conditionType === "health_superficial_exact") && stats.healthSup !== rule.value) return false;
-    if (rule.conditionType === "health_superficial" && stats.healthSup < rule.value) return false;
-    if ((rule.conditionType === "health_total_equals" || rule.conditionType === "health_total_exact") && stats.totalHealthDamage !== rule.value) return false;
-    if (rule.conditionType === "health_percent_below" && stats.healthPercent > rule.value) return false;
+    if ((rule.conditionType === "health_agg_equals" || rule.conditionType === "health_aggravated_exact") && stats.healthAgg !== Number(rule.value)) return false;
+    if (rule.conditionType === "health_aggravated" && stats.healthAgg < Number(rule.value)) return false;
+    if ((rule.conditionType === "health_sup_equals" || rule.conditionType === "health_superficial_exact") && stats.healthSup !== Number(rule.value)) return false;
+    if (rule.conditionType === "health_superficial" && stats.healthSup < Number(rule.value)) return false;
+    if ((rule.conditionType === "health_total_equals" || rule.conditionType === "health_total_exact") && stats.totalHealthDamage !== Number(rule.value)) return false;
+    if (rule.conditionType === "health_percent_below" && stats.healthPercent > Number(rule.value)) return false;
     if (rule.conditionType === "health_torpor" && !stats.isTorpor) return false;
     if (rule.conditionType === "health_impaired" && !stats.isHealthImpaired) return false;
 
     // Willpower Exact Value or Threshold
-    if ((rule.conditionType === "willpower_agg_equals" || rule.conditionType === "willpower_aggravated_exact") && stats.wpAgg !== rule.value) return false;
-    if (rule.conditionType === "willpower_aggravated" && stats.wpAgg < rule.value) return false;
-    if ((rule.conditionType === "willpower_total_equals" || rule.conditionType === "willpower_total_exact") && stats.totalWpDamage !== rule.value) return false;
+    if ((rule.conditionType === "willpower_agg_equals" || rule.conditionType === "willpower_aggravated_exact") && stats.wpAgg !== Number(rule.value)) return false;
+    if (rule.conditionType === "willpower_aggravated" && stats.wpAgg < Number(rule.value)) return false;
+    if ((rule.conditionType === "willpower_total_equals" || rule.conditionType === "willpower_total_exact") && stats.totalWpDamage !== Number(rule.value)) return false;
     if (rule.conditionType === "willpower_impaired" && !stats.isWpImpaired) return false;
 
     // Hunger / Rage Value Exact or Threshold
-    if ((rule.conditionType === "hunger_equals" || rule.conditionType === "hunger_exact") && stats.hungerVal !== rule.value) return false;
-    if (rule.conditionType === "hunger_gte" && stats.hungerVal < rule.value) return false;
+    if ((rule.conditionType === "hunger_equals" || rule.conditionType === "hunger_exact") && stats.hungerVal !== Number(rule.value)) return false;
+    if (rule.conditionType === "hunger_gte" && stats.hungerVal < Number(rule.value)) return false;
+
+    // Frenzy State Condition Rules
+    if (rule.conditionType === "frenzy_active" && !stats.isFrenzied) return false;
+    if (rule.conditionType === "frenzy_inactive" && stats.isFrenzied) return false;
+    if (rule.conditionType === "frenzy_equals" && (stats.isFrenzied ? 1 : 0) !== Number(rule.value)) return false;
+    if (rule.conditionType === "hunger_and_frenzy" && (!stats.isFrenzied || stats.hungerVal < Number(rule.value))) return false;
 
     // Combined Rule Checks
-    if (rule.requireHungerGte && stats.hungerVal < rule.requireHungerGte) return false;
-    if (rule.requireHealthAggGte && stats.healthAgg < rule.requireHealthAggGte) return false;
+    if (rule.requireHungerGte && stats.hungerVal < Number(rule.requireHungerGte)) return false;
+    if (rule.requireHealthAggGte && stats.healthAgg < Number(rule.requireHealthAggGte)) return false;
+    if (rule.requireFrenzy && !stats.isFrenzied) return false;
 
     return true;
   }

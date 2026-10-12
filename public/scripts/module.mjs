@@ -43,11 +43,29 @@ Hooks.on("updateActor", (actor, changes, options, userId) => {
   const healthChanged = "health" in sys;
   const willpowerChanged = "willpower" in sys;
   const hungerChanged = "hunger" in sys || "rage" in sys || "desperation" in sys;
+  const frenzyChanged = "frenzy" in sys || "isFrenzied" in sys;
 
-  if (healthChanged || willpowerChanged || hungerChanged) {
+  if (healthChanged || willpowerChanged || hungerChanged || frenzyChanged) {
     WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
   }
 });
+
+// Reactivity Hooks for Active Effect Changes (e.g. Frenzy Effect applied / removed)
+const onActiveEffectChange = (effect) => {
+  const actor = effect.parent;
+  if (actor && actor.documentName === "Actor") {
+    const isFrenzyEffect = effect.name?.toLowerCase().includes("frenzy") || 
+                           effect.label?.toLowerCase().includes("frenzy") ||
+                           (effect.statuses && (effect.statuses.has("frenzy") || effect.statuses.has("frenzied")));
+    if (isFrenzyEffect) {
+      WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
+    }
+  }
+};
+
+Hooks.on("createActiveEffect", onActiveEffectChange);
+Hooks.on("deleteActiveEffect", onActiveEffectChange);
+Hooks.on("updateActiveEffect", onActiveEffectChange);
 
 // Pre-update hook to parse dynamic level mapping and rules JSON before saving
 Hooks.on("preUpdateTile", (tileDoc, changes, options, userId) => {

@@ -1,13 +1,13 @@
 /**
  * Injects WoD5e Dynamic Tile Tracker Settings Tab into Foundry VTT v14 Tile Config Sheet
- * Allows setting specific images per level of a stat (Hunger 0..5, Health Damage, Willpower)
- * with FilePicker 'Browse File' buttons for all image path fields.
+ * Allows setting specific images per level of a stat (Hunger 0..5, Frenzy, Health Damage, Willpower)
+ * with FilePicker 'Browse File' buttons and support for hiding tiles completely (__NONE__).
  */
 
 export class WoD5eTileConfigExtension {
   static attachTab(app, html, data) {
     try {
-      // 1. Resolve root HTMLElement (handles native DOM in Foundry v13/v14 and jQuery $html)
+      // Resolve root HTMLElement
       const rootEl = html instanceof HTMLElement 
         ? html 
         : (html && html[0] instanceof HTMLElement ? html[0] : (app.element ? (app.element instanceof HTMLElement ? app.element : app.element[0]) : null));
@@ -25,6 +25,7 @@ export class WoD5eTileConfigExtension {
         enabled: false,
         actorId: "",
         defaultImage: "",
+        defaultHide: false,
         statMap: {
           enabled: true,
           statType: "hunger",
@@ -107,10 +108,13 @@ export class WoD5eTileConfigExtension {
             <div class="form-group" style="margin-bottom: 0;">
               <label style="font-weight: bold;"><i class="fas fa-image"></i> Default / Fallback Texture</label>
               <div class="form-fields" style="display: flex; gap: 6px; align-items: center;">
-                <input type="text" id="wod5e-default-img-input" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="${this._escapeHtml(defaultImgVal)}" placeholder="tiles/normal.png" style="flex: 1;"/>
-                <button type="button" id="wod5e-default-img-browse" class="button wod5e-browse-btn" style="white-space: nowrap; padding: 2px 10px; height: 28px; display: flex; align-items: center; gap: 4px;" title="Browse Image File">
-                  <i class="fas fa-folder-open"></i> Browse File
+                <input type="text" id="wod5e-default-img-input" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="${this._escapeHtml(defaultImgVal)}" placeholder="tiles/normal.png or __NONE__ to hide" style="flex: 1;"/>
+                <button type="button" id="wod5e-default-img-browse" class="button wod5e-browse-btn" style="white-space: nowrap; padding: 2px 8px; height: 28px; display: flex; align-items: center; gap: 4px;" title="Browse Image File">
+                  <i class="fas fa-folder-open"></i> Browse
                 </button>
+                <label style="font-size: 0.8em; white-space: nowrap; display: flex; align-items: center; gap: 4px; color: #ff8080;" title="Hide tile completely if no rule or map matches">
+                  <input type="checkbox" name="flags.wod5e-dynamic-tile-tracker.config.defaultHide" ${config.defaultHide ? "checked" : ""}/> Hide Tile
+                </label>
               </div>
             </div>
           </div>
@@ -124,7 +128,7 @@ export class WoD5eTileConfigExtension {
               </label>
             </h3>
             <p class="notes" style="margin-bottom: 10px; font-size: 0.85em; opacity: 0.85;">
-              Assign a distinct image file for each exact value/level of a stat (e.g. Hunger 0, Hunger 1, Hunger 2, Hunger 3, Hunger 4, Hunger 5).
+              Assign a distinct image file for each level (or <code>__NONE__</code> / Hide Tile to display no visual tile at all).
             </p>
 
             <div class="form-group" style="margin-bottom: 10px;">
@@ -132,6 +136,7 @@ export class WoD5eTileConfigExtension {
               <div class="form-fields">
                 <select id="wod5e-statmap-type" style="width: 100%;">
                   <option value="hunger" ${config.statMap?.statType === "hunger" ? "selected" : ""}>Hunger / Rage / Desperation (0 to 5)</option>
+                  <option value="frenzy" ${config.statMap?.statType === "frenzy" ? "selected" : ""}>Frenzy State (0 = Calm, 1 = Frenzied)</option>
                   <option value="health_agg" ${config.statMap?.statType === "health_agg" ? "selected" : ""}>Aggravated Health Damage (0 to 10)</option>
                   <option value="health_sup" ${config.statMap?.statType === "health_sup" ? "selected" : ""}>Superficial Health Damage (0 to 10)</option>
                   <option value="health_total" ${config.statMap?.statType === "health_total" ? "selected" : ""}>Total Health Damage (0 to 10)</option>
@@ -164,7 +169,7 @@ export class WoD5eTileConfigExtension {
                 <i class="fas fa-plus"></i> Add Rule
               </button>
             </h3>
-            <p class="notes" style="margin-bottom: 10px; font-size: 0.85em;">Evaluated if no Level Map image matches. First matching rule wins.</p>
+            <p class="notes" style="margin-bottom: 10px; font-size: 0.85em;">Evaluated if no Level Map image matches. First matching rule wins. Toggle <strong>Hide Tile</strong> to render no visual tile when matched.</p>
             
             <div id="wod5e-rules-container" style="display: flex; flex-direction: column; gap: 8px;">
               <!-- Rules injected dynamically -->
@@ -224,9 +229,6 @@ export class WoD5eTileConfigExtension {
     }
   }
 
-  /**
-   * Helper to bind native Foundry VTT FilePicker or file browser fallback to any button and text input pair
-   */
   static bindFilePicker(buttonEl, inputEl) {
     if (!buttonEl || !inputEl) return;
     buttonEl.addEventListener('click', (ev) => {
@@ -246,7 +248,6 @@ export class WoD5eTileConfigExtension {
         });
         fp.browse(currentPath);
       } else {
-        // Fallback for non-Foundry browser testing
         const fileInput = document.createElement("input");
         fileInput.type = "file";
         fileInput.accept = "image/*";
@@ -263,9 +264,6 @@ export class WoD5eTileConfigExtension {
     });
   }
 
-  /**
-   * Builds and manages the per-level stat image mapping matrix with Browse File buttons
-   */
   static _setupStatMapGrid(tabContent, initialStatMap) {
     const typeSelect = tabContent.querySelector('#wod5e-statmap-type');
     const enableCheckbox = tabContent.querySelector('#wod5e-statmap-enable');
@@ -287,6 +285,7 @@ export class WoD5eTileConfigExtension {
     };
 
     const getMaxLevelsForType = (type) => {
+      if (type === "frenzy") return 1;
       if (type === "hunger") return 5;
       return 10;
     };
@@ -301,7 +300,10 @@ export class WoD5eTileConfigExtension {
         const existingImg = currentStatMap.levels[valStr] || "";
 
         let labelText = `Level ${i}`;
-        if (type === "hunger") {
+        if (type === "frenzy") {
+          if (i === 0) labelText = `Frenzy Level 0 (Calm / Inactive)`;
+          else labelText = `Frenzy Level 1 (Frenzied / Active)`;
+        } else if (type === "hunger") {
           if (i === 0) labelText = `Hunger 0 (Satisfied)`;
           else if (i === 5) labelText = `Hunger 5 (Bestial / Starving)`;
           else labelText = `Hunger ${i}`;
@@ -326,17 +328,27 @@ export class WoD5eTileConfigExtension {
           <span style="width: 150px; font-size: 0.82em; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${labelText}">
             ${labelText}
           </span>
-          <input type="text" data-level="${i}" class="wod5e-level-img-input" value="${this._escapeHtml(existingImg)}" placeholder="Path to level ${i} image..." style="flex: 1; font-size: 0.85em;"/>
+          <input type="text" data-level="${i}" class="wod5e-level-img-input" value="${this._escapeHtml(existingImg)}" placeholder="Path or __NONE__ to hide tile..." style="flex: 1; font-size: 0.85em;"/>
           <button type="button" class="button wod5e-level-browse-btn" style="white-space: nowrap; padding: 2px 8px; font-size: 0.82em; height: 26px; display: flex; align-items: center; gap: 4px;" title="Browse File">
             <i class="fas fa-folder-open"></i> Browse
+          </button>
+          <button type="button" class="button wod5e-level-hide-btn" style="white-space: nowrap; padding: 2px 6px; font-size: 0.8em; height: 26px; color: #ff8080;" title="Set to hide tile">
+            <i class="fas fa-eye-slash"></i> Hide
           </button>
         `;
 
         const input = row.querySelector('.wod5e-level-img-input');
         const browseBtn = row.querySelector('.wod5e-level-browse-btn');
+        const hideBtn = row.querySelector('.wod5e-level-hide-btn');
 
         input.addEventListener('change', (e) => {
           currentStatMap.levels[valStr] = e.target.value.trim();
+          updateJson();
+        });
+
+        hideBtn.addEventListener('click', () => {
+          input.value = "__NONE__";
+          currentStatMap.levels[valStr] = "__NONE__";
           updateJson();
         });
 
@@ -376,9 +388,6 @@ export class WoD5eTileConfigExtension {
     updateJson();
   }
 
-  /**
-   * Dynamic Rule Builder Engine with Browse File buttons
-   */
   static _setupRulesEngine(tabContent, initialRules) {
     const container = tabContent.querySelector('#wod5e-rules-container');
     const addBtn = tabContent.querySelector('#wod5e-add-rule-btn');
@@ -402,10 +411,15 @@ export class WoD5eTileConfigExtension {
         card.className = 'wod5e-rule-card';
         card.style.cssText = "background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15); border-radius: 4px; padding: 8px; font-size: 0.85em;";
 
+        const isHide = rule.hideTile || rule.image === "__NONE__" || rule.image === "none";
+
         card.innerHTML = `
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
             <span style="font-weight: bold; color: #ff6b6b;"><i class="fas fa-hashtag"></i> Rule #${idx + 1}</span>
             <div>
+              <label style="font-size: 0.85em; margin-right: 8px; color: #ff9999; cursor: pointer;" title="Hide Tile completely when this condition matches">
+                <input type="checkbox" class="rule-hide-chk" ${isHide ? "checked" : ""}/> Hide Tile
+              </label>
               <input type="checkbox" class="rule-enable-chk" ${rule.enabled ? "checked" : ""} title="Enable/Disable Rule"/>
               <button type="button" class="rule-delete-btn button" style="padding: 1px 6px; margin-left: 6px;" title="Delete Rule">
                 <i class="fas fa-trash" style="color: #e53e3e;"></i>
@@ -415,24 +429,25 @@ export class WoD5eTileConfigExtension {
 
           <div style="display: flex; gap: 6px; margin-bottom: 6px;">
             <select class="rule-cond-type" style="flex: 2;">
+              <option value="frenzy_active" ${rule.conditionType === "frenzy_active" ? "selected" : ""}>Frenzy Active (In Frenzy)</option>
+              <option value="frenzy_inactive" ${rule.conditionType === "frenzy_inactive" ? "selected" : ""}>Frenzy Inactive (Calm)</option>
+              <option value="hunger_and_frenzy" ${rule.conditionType === "hunger_and_frenzy" ? "selected" : ""}>Hunger >= X AND in Frenzy</option>
               <option value="hunger_equals" ${rule.conditionType === "hunger_equals" ? "selected" : ""}>Hunger Exact Match (=)</option>
               <option value="hunger_gte" ${rule.conditionType === "hunger_gte" ? "selected" : ""}>Hunger Greater Than or Equal (>=)</option>
+              <option value="health_torpor" ${rule.conditionType === "health_torpor" ? "selected" : ""}>Incapacitated / Torpor State</option>
               <option value="health_agg_equals" ${rule.conditionType === "health_agg_equals" ? "selected" : ""}>Aggravated Health Exact Match (=)</option>
               <option value="health_aggravated" ${rule.conditionType === "health_aggravated" ? "selected" : ""}>Aggravated Health Damage (>=)</option>
               <option value="health_sup_equals" ${rule.conditionType === "health_sup_equals" ? "selected" : ""}>Superficial Health Exact Match (=)</option>
               <option value="health_superficial" ${rule.conditionType === "health_superficial" ? "selected" : ""}>Superficial Health Damage (>=)</option>
-              <option value="health_total_equals" ${rule.conditionType === "health_total_equals" ? "selected" : ""}>Total Health Damage Exact (=)</option>
               <option value="health_percent_below" ${rule.conditionType === "health_percent_below" ? "selected" : ""}>Health Percent Below (<= %)</option>
-              <option value="health_torpor" ${rule.conditionType === "health_torpor" ? "selected" : ""}>Incapacitated / Torpor State</option>
-              <option value="willpower_agg_equals" ${rule.conditionType === "willpower_agg_equals" ? "selected" : ""}>Aggravated Willpower Exact (=)</option>
               <option value="willpower_aggravated" ${rule.conditionType === "willpower_aggravated" ? "selected" : ""}>Aggravated Willpower Damage (>=)</option>
             </select>
 
             <input type="number" class="rule-cond-val" value="${rule.value ?? 1}" min="0" max="100" style="width: 60px;" placeholder="Value"/>
           </div>
 
-          <div style="display: flex; gap: 6px; align-items: center;">
-            <input type="text" class="rule-img-src" value="${this._escapeHtml(rule.image || "")}" placeholder="Image path (e.g. tiles/blood.png)" style="flex: 1;"/>
+          <div class="rule-img-row" style="display: ${isHide ? "none" : "flex"}; gap: 6px; align-items: center;">
+            <input type="text" class="rule-img-src" value="${this._escapeHtml(rule.image || "")}" placeholder="Image path (e.g. tiles/frenzy.png)" style="flex: 1;"/>
             <button type="button" class="button rule-browse-btn" style="white-space: nowrap; padding: 2px 8px; font-size: 0.82em; height: 26px; display: flex; align-items: center; gap: 4px;" title="Browse Image File">
               <i class="fas fa-folder-open"></i> Browse
             </button>
@@ -442,6 +457,21 @@ export class WoD5eTileConfigExtension {
 
         const imgInput = card.querySelector('.rule-img-src');
         const browseBtn = card.querySelector('.rule-browse-btn');
+        const hideChk = card.querySelector('.rule-hide-chk');
+        const imgRow = card.querySelector('.rule-img-row');
+
+        hideChk.addEventListener('change', (e) => {
+          const checked = e.target.checked;
+          rules[idx].hideTile = checked;
+          if (checked) {
+            rules[idx].image = "__NONE__";
+            imgRow.style.display = "none";
+          } else {
+            if (rules[idx].image === "__NONE__") rules[idx].image = "";
+            imgRow.style.display = "flex";
+          }
+          updateJson();
+        });
 
         card.querySelector('.rule-enable-chk').addEventListener('change', (e) => {
           rules[idx].enabled = e.target.checked;
@@ -464,14 +494,15 @@ export class WoD5eTileConfigExtension {
           updateJson();
         });
 
-        imgInput.addEventListener('change', (e) => {
-          rules[idx].image = e.target.value.trim();
-          updateJson();
-        });
+        if (imgInput) {
+          imgInput.addEventListener('change', (e) => {
+            rules[idx].image = e.target.value.trim();
+            updateJson();
+          });
+          this.bindFilePicker(browseBtn, imgInput);
+        }
 
-        this.bindFilePicker(browseBtn, imgInput);
-
-        card.querySelector('.rule-tint').addEventListener('change', (e) => {
+        card.querySelector('.rule-tint')?.addEventListener('change', (e) => {
           rules[idx].tint = e.target.value;
           updateJson();
         });
@@ -483,7 +514,8 @@ export class WoD5eTileConfigExtension {
     addBtn.addEventListener('click', () => {
       rules.push({
         enabled: true,
-        conditionType: "hunger_equals",
+        hideTile: false,
+        conditionType: "frenzy_active",
         value: 1,
         image: "",
         tint: "#ffffff",

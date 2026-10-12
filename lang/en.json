@@ -13,6 +13,15 @@
     "ConditionHealthSuperficial": "Superficial Health Damage ≥",
     "ConditionHealthTorpor": "Actor in Torpor / Incapacitated",
     "ConditionHungerGte": "Hunger / Rage Level ≥",
-    "ConditionWillpowerImpaired": "Willpower Impaired"
+    "ConditionWillpowerImpaired": "Willpower Impaired",
+    "ConditionFrenzyActive": "Frenzy Active (Rage / Bestial)",
+    "ConditionFrenzyInactive": "Frenzy Inactive (Calm)",
+    "ConditionFrenzyEquals": "Frenzy State Equals (=)",
+    "ConditionHungerAndFrenzy": "Hunger ≥ Value AND in Frenzy",
+    "FrenzyStateNormal": "Frenzy Level 0 (Calm / Inactive)",
+    "FrenzyStateActive": "Frenzy Level 1 (Frenzied / Active)",
+    "HideTile": "Hide Tile (No Visual Image)",
+    "HideTileHint": "Displays no visual tile on canvas when condition is satisfied",
+    "NoVisualTile": "[No Visual Tile / Hidden]"
   }
 }
