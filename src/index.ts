@@ -1,84 +1,73 @@
 import { Hono } from "hono";
 
-export interface Env {
+type Bindings = {
   ASSETS: Fetcher;
-}
-
-const app = new Hono()
-  .get("/api/health", (c) => c.json({ 
-    status: "ok", 
-    module: "wod5e-dynamic-tile-tracker", 
-    fvttVersion: "14", 
-    wod5eVersion: "5.3.28" 
-  }))
-  .get("/module.json", (c) => {
-    const manifest = {
-      id: "wod5e-dynamic-tile-tracker",
-      title: "World of Darkness 5e - Dynamic Tile Tracker",
-      description: "Foundry VTT v14 module for World of Darkness 5e (5.3.28) that updates tile textures, tints, and overlays in real-time based on Actor Health, Willpower, Hunger, Rage, and Frenzy trackers.",
-      version: "1.0.0",
-      compatibility: {
-        minimum: "14",
-        verified: "14"
-      },
-      authors: [
-        {
-          name: "WoD5e VTT Tools",
-          discord: "wod5e-vtt-devs"
-        }
-      ],
-      relationships: {
-        systems: [
-          {
-            id: "wod5e",
-            type: "system",
-            compatibility: {
-              minimum: "5.3.0",
-              verified: "5.3.28"
-            }
-          }
-        ]
-      },
-      esmodules: [
-        "scripts/module.mjs"
-      ],
-      styles: [
-        "styles/module.css"
-      ],
-      languages: [
-        {
-          lang: "en",
-          name: "English",
-          path: "lang/en.json"
-        }
-      ],
-      url: "https://github.com/foundryvtt/wod5e-dynamic-tile-tracker",
-      manifest: "https://raw.githubusercontent.com/foundryvtt/wod5e-dynamic-tile-tracker/main/module.json",
-      download: "https://github.com/foundryvtt/wod5e-dynamic-tile-tracker/releases/download/v1.0.0/wod5e-dynamic-tile-tracker-v14.zip"
-    };
-    return c.json(manifest);
-  })
-  .get("/api/manifest.json", (c) => {
-    return c.redirect("/module.json");
-  });
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    // If API route or module.json, let Hono handle it
-    if (url.pathname.endsWith("/module.json") || url.pathname.includes("/api/")) {
-      return app.fetch(request, env);
-    }
-
-    try {
-      const response = await env.ASSETS.fetch(request);
-      if (response.status === 404 && !url.pathname.includes(".")) {
-        return await env.ASSETS.fetch(new URL("/", request.url));
-      }
-      return response;
-    } catch {
-      return env.ASSETS.fetch(request);
-    }
-  }
 };
+
+const app = new Hono<{ Bindings: Bindings }>();
+
+app.get("/api/health", (c) => {
+  return c.json({
+    status: "ok",
+    module: "wod5e-dynamic-tile-tracker",
+    fvttVersion: "14",
+    wod5eVersion: "5.3.28",
+  });
+});
+
+app.get("/module.json", (c) => {
+  return c.json({
+    id: "wod5e-dynamic-tile-tracker",
+    title: "World of Darkness 5e - Dynamic Tile Tracker",
+    description: "Foundry VTT v14 module for World of Darkness 5e (5.3.28) that updates tile textures, tints, and overlays in real-time based on Actor Health, Willpower, Hunger, Rage, and Frenzy trackers.",
+    version: "1.0.0",
+    compatibility: {
+      minimum: "14",
+      verified: "14"
+    },
+    authors: [
+      {
+        name: "WoD5e VTT Tools",
+        discord: "wod5e-vtt-devs"
+      }
+    ],
+    relationships: {
+      systems: [
+        {
+          id: "wod5e",
+          type: "system",
+          compatibility: {
+            minimum: "5.3.0",
+            verified: "5.3.28"
+          }
+        }
+      ]
+    },
+    esmodules: [
+      "scripts/module.mjs"
+    ],
+    styles: [
+      "styles/module.css"
+    ],
+    languages: [
+      {
+        lang: "en",
+        name: "English",
+        path: "lang/en.json"
+      }
+    ],
+    url: "https://github.com/foundryvtt/wod5e-dynamic-tile-tracker",
+    manifest: "https://raw.githubusercontent.com/foundryvtt/wod5e-dynamic-tile-tracker/main/module.json",
+    download: "https://github.com/foundryvtt/wod5e-dynamic-tile-tracker/releases/download/v1.0.0/wod5e-dynamic-tile-tracker-v14.zip"
+  });
+});
+
+app.get("/*", async (c) => {
+  try {
+    return await c.env.ASSETS.fetch(c.req.raw);
+  } catch {
+    return c.text("Not found", 404);
+  }
+});
+
+export default app;
