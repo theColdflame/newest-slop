@@ -362,8 +362,8 @@ export class WoD5eTileTrackerEngine {
 
     return {
       healthMax,
-      healthAgg,
-      healthSup,
+      healthAgg: rawAgg,
+      healthSup: rawSup,
       effectiveHealthAgg,
       effectiveHealthSup,
       totalHealthDamage,
@@ -372,8 +372,8 @@ export class WoD5eTileTrackerEngine {
       isHealthImpaired,
       isTorpor,
       wpMax,
-      wpAgg,
-      wpSup,
+      wpAgg: rawWpAgg,
+      wpSup: rawWpSup,
       effectiveWpAgg,
       effectiveWpSup,
       totalWpDamage,

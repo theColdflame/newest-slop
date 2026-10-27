@@ -244,14 +244,25 @@ function App() {
     setIsDownloading(true);
     try {
       const zip = new JSZip();
-      zip.file("module.json", MODULE_JSON_CONTENT);
-      zip.file("README.md", `# World of Darkness 5e - Dynamic Tile Tracker\n\nFoundry VTT v14 & WoD5e 5.3.28 module.`);
-      zip.file("lang/en.json", `{\n  "WOD5E_TILE.TabTitle": "WoD5e Tracker"\n}`);
-      zip.file("styles/module.css", `/* WoD5e Dynamic Tile Tracker CSS */\n.wod5e-tracker-tab { padding: 8px; }`);
-      zip.file("scripts/module.mjs", `import { WoD5eTileTrackerEngine } from "./wod5e-tile-tracker.mjs";\nimport { WoD5eTileConfigExtension } from "./tile-config-extension.mjs";\nimport { WoD5eTileHUDExtension } from "./tile-hud-extension.mjs";\n\nHooks.once("init", () => {\n  console.log("WoD5e Dynamic Tile Tracker | Initializing");\n});\n`);
-      zip.file("scripts/wod5e-tile-tracker.mjs", `/* Core Tile Engine */`);
-      zip.file("scripts/tile-config-extension.mjs", `/* Tile Config Extension */`);
-      zip.file("scripts/tile-hud-extension.mjs", `/* Tile HUD Extension */`);
+
+      const [modJson, langEn, modCss, modMjs, trackerMjs, configMjs, hudMjs] = await Promise.all([
+        fetch('/module.json').then(r => r.text()),
+        fetch('/lang/en.json').then(r => r.text()),
+        fetch('/styles/module.css').then(r => r.text()),
+        fetch('/scripts/module.mjs').then(r => r.text()),
+        fetch('/scripts/wod5e-tile-tracker.mjs').then(r => r.text()),
+        fetch('/scripts/tile-config-extension.mjs').then(r => r.text()),
+        fetch('/scripts/tile-hud-extension.mjs').then(r => r.text())
+      ]);
+
+      zip.file("module.json", modJson);
+      zip.file("README.md", `# World of Darkness 5e - Dynamic Tile Tracker\n\nFoundry VTT v14 & WoD5e 5.3.28 module.\n\n## Installation\n\n1. Download \`wod5e-dynamic-tile-tracker-v14.zip\`.\n2. Extract into your Foundry VTT user data directory under \`Data/modules/wod5e-dynamic-tile-tracker\`.\n3. Launch Foundry VTT, open your World of Darkness 5e world, and enable the module in **Manage Modules**.\n\n## Features\n\n- **Real-Time Canvas Tile Image Swapping**: Swaps visual tile textures, tints, scale, or transparency when a bound Actor's Health, Willpower, Hunger, Rage, or Frenzy state updates.\n- **WoD5e 5.3.28 Health Calculation**: Fully accounts for Aggravated (X) and Superficial (/) damage boxes, overflow rules, Torpor, and Impaired states.\n- **Level Map Grid & Conditional Priority Rules**: Assign unique file paths per level or create rule matrix overrides (e.g., Frenzy, Torpor, Hunger >= 5).\n- **Foundry VTT v14 FilePicker Integration**: Standard FilePicker button triggers for selecting tile assets directly from User Data (\`Data/\`), S3, or ForgeVTT storage.`);
+      zip.file("lang/en.json", langEn);
+      zip.file("styles/module.css", modCss);
+      zip.file("scripts/module.mjs", modMjs);
+      zip.file("scripts/wod5e-tile-tracker.mjs", trackerMjs);
+      zip.file("scripts/tile-config-extension.mjs", configMjs);
+      zip.file("scripts/tile-hud-extension.mjs", hudMjs);
 
       const blob = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(blob);

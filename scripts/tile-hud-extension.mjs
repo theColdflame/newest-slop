@@ -28,7 +28,18 @@ export class WoD5eTileHUDExtension {
 
       button.addEventListener('click', (ev) => {
         ev.preventDefault();
-        const actor = game.actors.get(config.actorId);
+        let actor = null;
+        if (config.actorId) {
+          if (typeof fromUuidSync === "function") {
+            try {
+              const res = fromUuidSync(config.actorId);
+              if (res) actor = res.documentName === "Token" ? res.actor : (res.actor || res);
+            } catch(e){}
+          }
+          if (!actor && typeof game !== "undefined" && game.actors) {
+            actor = game.actors.get(config.actorId);
+          }
+        }
         if (actor) {
           actor.sheet.render(true);
         } else {
