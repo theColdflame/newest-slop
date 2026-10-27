@@ -91,27 +91,35 @@ Hooks.on("preUpdateTile", (tileDoc, changes, options, userId) => {
 
   if (!moduleConfig) return;
 
-  if (typeof moduleConfig.statMapJson === "string") {
+  if (moduleConfig.statMapJson !== undefined) {
     try {
-      const parsed = JSON.parse(moduleConfig.statMapJson);
-      if (changes.flags?.["wod5e-dynamic-tile-tracker"]?.config) {
-        changes.flags["wod5e-dynamic-tile-tracker"].config.statMap = parsed;
-      } else {
-        changes["flags.wod5e-dynamic-tile-tracker.config.statMap"] = parsed;
-      }
+      const parsedMap = typeof moduleConfig.statMapJson === "string" 
+        ? JSON.parse(moduleConfig.statMapJson) 
+        : moduleConfig.statMapJson;
+
+      if (!changes.flags) changes.flags = {};
+      if (!changes.flags["wod5e-dynamic-tile-tracker"]) changes.flags["wod5e-dynamic-tile-tracker"] = {};
+      if (!changes.flags["wod5e-dynamic-tile-tracker"].config) changes.flags["wod5e-dynamic-tile-tracker"].config = {};
+
+      changes.flags["wod5e-dynamic-tile-tracker"].config.statMap = parsedMap;
+      changes["flags.wod5e-dynamic-tile-tracker.config.statMap"] = parsedMap;
     } catch (e) {
       console.error("WoD5e Dynamic Tile Tracker | Error parsing statMapJson in preUpdateTile:", e);
     }
   }
 
-  if (typeof moduleConfig.rulesJson === "string") {
+  if (moduleConfig.rulesJson !== undefined) {
     try {
-      const parsed = JSON.parse(moduleConfig.rulesJson);
-      if (changes.flags?.["wod5e-dynamic-tile-tracker"]?.config) {
-        changes.flags["wod5e-dynamic-tile-tracker"].config.rules = parsed;
-      } else {
-        changes["flags.wod5e-dynamic-tile-tracker.config.rules"] = parsed;
-      }
+      const parsedRules = typeof moduleConfig.rulesJson === "string" 
+        ? JSON.parse(moduleConfig.rulesJson) 
+        : moduleConfig.rulesJson;
+
+      if (!changes.flags) changes.flags = {};
+      if (!changes.flags["wod5e-dynamic-tile-tracker"]) changes.flags["wod5e-dynamic-tile-tracker"] = {};
+      if (!changes.flags["wod5e-dynamic-tile-tracker"].config) changes.flags["wod5e-dynamic-tile-tracker"].config = {};
+
+      changes.flags["wod5e-dynamic-tile-tracker"].config.rules = parsedRules;
+      changes["flags.wod5e-dynamic-tile-tracker.config.rules"] = parsedRules;
     } catch (e) {
       console.error("WoD5e Dynamic Tile Tracker | Error parsing rulesJson in preUpdateTile:", e);
     }

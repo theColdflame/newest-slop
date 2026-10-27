@@ -14,20 +14,23 @@ export class WoD5eTileTrackerEngine {
   /**
    * Main listener when actor tracker values (Health, Willpower, Hunger, Frenzy) change
    */
-  static onActorTrackerUpdated(actor) {
-    if (!actor) return;
+  static onActorTrackerUpdated(targetActor) {
+    if (!targetActor) return;
 
     const scene = canvas?.scene;
     if (!scene) return;
 
+    const actor = targetActor.actor || targetActor;
     const actorId = actor.id;
     const actorUuid = actor.uuid;
     const tokenUuid = actor.token?.uuid;
     const parentTokenUuid = actor.parent?.documentName === "Token" ? actor.parent.uuid : null;
     const protoActorId = actor.prototypeToken?.actor?.id || actor.prototypeToken?.id;
 
-    // Find all tiles in active scene bound to this actor (by ID or UUID)
-    const boundTiles = scene.tiles.filter(t => {
+    // Retrieve all tiles in active scene safely across standard Arrays and Collections
+    const tilesList = scene.tiles?.contents || (scene.tiles ? Array.from(scene.tiles) : []);
+
+    const boundTiles = tilesList.filter(t => {
       const config = t.getFlag(this.MODULE_ID, "config");
       if (!config || !config.enabled) return false;
       const targetId = (config.actorId || "").trim();
@@ -82,12 +85,19 @@ export class WoD5eTileTrackerEngine {
     let config = tileDoc.getFlag(this.MODULE_ID, "config");
     if (!config || !config.enabled) return;
 
-    // Ensure statMap & rules are parsed if stored as JSON strings
-    if (typeof config.statMapJson === "string" && !config.statMap) {
-      try { config.statMap = JSON.parse(config.statMapJson); } catch (e) {}
+    // Ensure statMap & rules are ALWAYS re-parsed if stored as JSON strings
+    // so sheet updates apply immediately without requiring module reload
+    if (typeof config.statMapJson === "string") {
+      try {
+        const parsedMap = JSON.parse(config.statMapJson);
+        if (parsedMap) config.statMap = parsedMap;
+      } catch (e) {}
     }
-    if (typeof config.rulesJson === "string" && (!config.rules || !config.rules.length)) {
-      try { config.rules = JSON.parse(config.rulesJson); } catch (e) {}
+    if (typeof config.rulesJson === "string") {
+      try {
+        const parsedRules = JSON.parse(config.rulesJson);
+        if (Array.isArray(parsedRules)) config.rules = parsedRules;
+      } catch (e) {}
     }
 
     // Resolve bound actor by ID or UUID
@@ -283,9 +293,10 @@ export class WoD5eTileTrackerEngine {
    * Extract Health, Willpower, Hunger, Frenzy trackers according to WoD5e 5.3.28 system schema
    * Correctly accounting for combined Superficial and Aggravated damage boxes & V5 overflow rules.
    */
-  static extractWoD5eStats(actor) {
-    if (!actor) return this._defaultStats();
+  static extractWoD5eStats(target) {
+    if (!target) return this._defaultStats();
 
+    const actor = target.actor ? target.actor : target;
     const sys = actor.system || actor._source?.system || {};
 
     // Helper to extract clean integer values from primitive or nested object definitions
