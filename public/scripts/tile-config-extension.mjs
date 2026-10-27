@@ -629,6 +629,8 @@ export class WoD5eTileConfigExtension {
               <option value="health_total_gte" ${rule.conditionType === "health_total_gte" ? "selected" : ""}>Total Health Damage (>=)</option>
               <option value="health_percent_below" ${rule.conditionType === "health_percent_below" ? "selected" : ""}>Health Percent Below (<= %)</option>
               <option value="willpower_aggravated" ${rule.conditionType === "willpower_aggravated" ? "selected" : ""}>Aggravated Willpower Damage (>=)</option>
+              <option value="willpower_sup_equals" ${rule.conditionType === "willpower_sup_equals" ? "selected" : ""}>Superficial Willpower Exact Match (=)</option>
+              <option value="willpower_superficial" ${rule.conditionType === "willpower_superficial" ? "selected" : ""}>Superficial Willpower Damage (>=)</option>
             </select>
 
             <input type="number" class="rule-cond-val" value="${rule.value ?? 1}" min="0" max="100" style="width: 60px;" placeholder="Value"/>

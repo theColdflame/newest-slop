@@ -79,8 +79,16 @@ export class WoD5eTileTrackerEngine {
    * Evaluates level mappings and priority rules against actor state and updates tile appearance
    */
   static async evaluateTile(tileDoc, actorOverride = null) {
-    const config = tileDoc.getFlag(this.MODULE_ID, "config");
+    let config = tileDoc.getFlag(this.MODULE_ID, "config");
     if (!config || !config.enabled) return;
+
+    // Ensure statMap & rules are parsed if stored as JSON strings
+    if (typeof config.statMapJson === "string" && !config.statMap) {
+      try { config.statMap = JSON.parse(config.statMapJson); } catch (e) {}
+    }
+    if (typeof config.rulesJson === "string" && (!config.rules || !config.rules.length)) {
+      try { config.rules = JSON.parse(config.rulesJson); } catch (e) {}
+    }
 
     // Resolve bound actor by ID or UUID
     let actor = actorOverride;
@@ -232,9 +240,11 @@ export class WoD5eTileTrackerEngine {
         currentVal = stats.isFrenzied ? 1 : 0;
         break;
       case "health_agg":
+      case "health_aggravated":
         currentVal = stats.effectiveHealthAgg !== undefined ? stats.effectiveHealthAgg : stats.healthAgg;
         break;
       case "health_sup":
+      case "health_superficial":
         currentVal = stats.effectiveHealthSup !== undefined ? stats.effectiveHealthSup : stats.healthSup;
         break;
       case "health_total":
@@ -244,9 +254,11 @@ export class WoD5eTileTrackerEngine {
         currentVal = stats.healthRemaining;
         break;
       case "willpower_agg":
+      case "willpower_aggravated":
         currentVal = stats.effectiveWpAgg !== undefined ? stats.effectiveWpAgg : stats.wpAgg;
         break;
       case "willpower_sup":
+      case "willpower_superficial":
         currentVal = stats.effectiveWpSup !== undefined ? stats.effectiveWpSup : stats.wpSup;
         break;
       case "willpower_total":
@@ -272,40 +284,87 @@ export class WoD5eTileTrackerEngine {
    * Correctly accounting for combined Superficial and Aggravated damage boxes & V5 overflow rules.
    */
   static extractWoD5eStats(actor) {
-    const sys = actor.system || {};
+    if (!actor) return this._defaultStats();
 
+    const sys = actor.system || actor._source?.system || {};
+
+    // Helper to extract clean integer values from primitive or nested object definitions
+    // MUST NOT fall back to max capacity when value is undefined
     const getVal = (v) => {
-      if (v === null || v === undefined) return 0;
+      if (v === null || v === undefined) return null;
       if (typeof v === "number") return isNaN(v) ? 0 : v;
-      if (typeof v === "object") {
-        if (v.value !== undefined && v.value !== null) return getVal(v.value);
-        if (v.current !== undefined && v.current !== null) return getVal(v.current);
-        if (v.damage !== undefined && v.damage !== null) return getVal(v.damage);
-        if (v.amount !== undefined && v.amount !== null) return getVal(v.amount);
-        return 0;
+      if (typeof v === "boolean") return v ? 1 : 0;
+      if (typeof v === "string") {
+        const parsed = parseInt(v, 10);
+        return isNaN(parsed) ? 0 : parsed;
       }
-      const parsed = Number(v);
-      return isNaN(parsed) ? 0 : parsed;
+      if (typeof v === "object") {
+        if (v.value !== undefined && v.value !== null) {
+          const res = getVal(v.value);
+          if (res !== null) return res;
+        }
+        if (v.current !== undefined && v.current !== null) {
+          const res = getVal(v.current);
+          if (res !== null) return res;
+        }
+        if (v.damage !== undefined && v.damage !== null) {
+          const res = getVal(v.damage);
+          if (res !== null) return res;
+        }
+        if (v.amount !== undefined && v.amount !== null) {
+          const res = getVal(v.amount);
+          if (res !== null) return res;
+        }
+        if (v.superficial !== undefined && v.superficial !== null) {
+          const res = getVal(v.superficial);
+          if (res !== null) return res;
+        }
+        if (v.aggravated !== undefined && v.aggravated !== null) {
+          const res = getVal(v.aggravated);
+          if (res !== null) return res;
+        }
+      }
+      return null;
     };
 
-    // 1. Health Tracker (WoD5e System 5.3.28: system.health or system.attributes.health)
-    const health = sys.health || sys.attributes?.health || {};
-    const healthMax = Math.max(1, getVal(health.max ?? health.value ?? health.maxHealth ?? 6));
+    const findFirstNumber = (...candidates) => {
+      for (const c of candidates) {
+        const res = getVal(c);
+        if (res !== null && !isNaN(res)) return res;
+      }
+      return 0;
+    };
 
-    const rawAgg = getVal(
-      health.aggravated ??
-      health.agg ??
-      health.aggravatedDamage ??
-      health.damage?.aggravated ??
-      0
+    // 1. Health Tracker (WoD5e System 5.3.28: system.health or system.attributes.health or system.hp)
+    const health = sys.health || sys.attributes?.health || sys.hp || sys.trackers?.health || {};
+
+    const healthMax = Math.max(1, findFirstNumber(
+      health.max,
+      health.maxHealth,
+      health.value,
+      6
+    ));
+
+    const rawAgg = findFirstNumber(
+      health.aggravated,
+      health.agg,
+      health.aggravatedDamage,
+      health.aggravated_damage,
+      health.damage?.aggravated,
+      health.damage?.agg,
+      sys.health_aggravated,
+      sys.aggravated
     );
 
-    const rawSup = getVal(
-      health.superficial ??
-      health.sup ??
-      health.superficialDamage ??
-      health.damage?.superficial ??
-      0
+    const rawSup = findFirstNumber(
+      health.superficial,
+      health.sup,
+      health.superficialDamage,
+      health.superficial_damage,
+      health.damage?.superficial,
+      health.damage?.sup,
+      sys.health_superficial,
+      sys.superficial
     );
 
     let effectiveHealthAgg = Math.max(0, rawAgg);
@@ -330,23 +389,30 @@ export class WoD5eTileTrackerEngine {
     const isHealthImpaired = totalHealthDamage >= healthMax;
 
     // 2. Willpower Tracker
-    const willpower = sys.willpower || sys.attributes?.willpower || {};
-    const wpMax = Math.max(1, getVal(willpower.max ?? willpower.value ?? 6));
+    const willpower = sys.willpower || sys.attributes?.willpower || sys.wp || sys.trackers?.willpower || {};
+    const wpMax = Math.max(1, findFirstNumber(
+      willpower.max,
+      willpower.maxWillpower,
+      willpower.value,
+      6
+    ));
 
-    const rawWpAgg = getVal(
-      willpower.aggravated ??
-      willpower.agg ??
-      willpower.aggravatedDamage ??
-      willpower.damage?.aggravated ??
-      0
+    const rawWpAgg = findFirstNumber(
+      willpower.aggravated,
+      willpower.agg,
+      willpower.aggravatedDamage,
+      willpower.aggravated_damage,
+      willpower.damage?.aggravated,
+      sys.willpower_aggravated
     );
 
-    const rawWpSup = getVal(
-      willpower.superficial ??
-      willpower.sup ??
-      willpower.superficialDamage ??
-      willpower.damage?.superficial ??
-      0
+    const rawWpSup = findFirstNumber(
+      willpower.superficial,
+      willpower.sup,
+      willpower.superficialDamage,
+      willpower.superficial_damage,
+      willpower.damage?.superficial,
+      sys.willpower_superficial
     );
 
     let effectiveWpAgg = Math.max(0, rawWpAgg);
@@ -366,14 +432,13 @@ export class WoD5eTileTrackerEngine {
     const isWpImpaired = totalWpDamage >= wpMax;
 
     // 3. Hunger / Rage / Desperation (0..5)
-    const rawHunger = getVal(
-      sys.hunger?.value ??
-      sys.hunger ??
-      sys.rage?.value ??
-      sys.rage ??
-      sys.desperation?.value ??
-      sys.desperation ??
-      0
+    const rawHunger = findFirstNumber(
+      sys.hunger?.value,
+      sys.hunger,
+      sys.rage?.value,
+      sys.rage,
+      sys.desperation?.value,
+      sys.desperation
     );
     const hungerVal = Math.max(0, Math.min(5, rawHunger));
 
@@ -417,6 +482,32 @@ export class WoD5eTileTrackerEngine {
     };
   }
 
+  static _defaultStats() {
+    return {
+      healthMax: 6,
+      healthAgg: 0,
+      healthSup: 0,
+      effectiveHealthAgg: 0,
+      effectiveHealthSup: 0,
+      totalHealthDamage: 0,
+      healthRemaining: 6,
+      healthPercent: 100,
+      isHealthImpaired: false,
+      isTorpor: false,
+      wpMax: 6,
+      wpAgg: 0,
+      wpSup: 0,
+      effectiveWpAgg: 0,
+      effectiveWpSup: 0,
+      totalWpDamage: 0,
+      wpRemaining: 6,
+      isWpImpaired: false,
+      hungerVal: 0,
+      isFrenzied: false,
+      frenzyVal: 0
+    };
+  }
+
   /**
    * Rule Condition Evaluator
    */
@@ -424,62 +515,77 @@ export class WoD5eTileTrackerEngine {
     if (!rule || !rule.enabled) return false;
 
     const val = Number(rule.value ?? 0);
+    const cond = rule.conditionType;
 
     // Health Aggravated Exact or Threshold
-    if (rule.conditionType === "health_agg_equals" || rule.conditionType === "health_aggravated_exact") {
+    if (cond === "health_agg_equals" || cond === "health_aggravated_exact") {
       if (stats.effectiveHealthAgg !== val && stats.healthAgg !== val) return false;
     }
-    if (rule.conditionType === "health_aggravated" && stats.effectiveHealthAgg < val && stats.healthAgg < val) return false;
+    if (cond === "health_aggravated" || cond === "health_agg_gte" || cond === "health_aggravated_gte") {
+      if (stats.effectiveHealthAgg < val && stats.healthAgg < val) return false;
+    }
 
     // Health Superficial Exact or Threshold
-    if (rule.conditionType === "health_sup_equals" || rule.conditionType === "health_superficial_exact") {
+    if (cond === "health_sup_equals" || cond === "health_superficial_exact") {
       if (stats.effectiveHealthSup !== val && stats.healthSup !== val) return false;
     }
-    if (rule.conditionType === "health_superficial" && stats.effectiveHealthSup < val && stats.healthSup < val) return false;
+    if (cond === "health_superficial" || cond === "health_sup_gte" || cond === "health_superficial_gte") {
+      if (stats.effectiveHealthSup < val && stats.healthSup < val) return false;
+    }
 
     // Health Total Damage
-    if (rule.conditionType === "health_total_equals" || rule.conditionType === "health_total_exact") {
+    if (cond === "health_total_equals" || cond === "health_total_exact") {
       if (stats.totalHealthDamage !== val) return false;
     }
-    if (rule.conditionType === "health_total_gte" && stats.totalHealthDamage < val) return false;
+    if (cond === "health_total_gte" || cond === "health_total") {
+      if (stats.totalHealthDamage < val) return false;
+    }
 
     // Health Remaining
-    if (rule.conditionType === "health_remaining_equals" && stats.healthRemaining !== val) return false;
-    if (rule.conditionType === "health_remaining_lte" && stats.healthRemaining > val) return false;
+    if (cond === "health_remaining_equals" && stats.healthRemaining !== val) return false;
+    if ((cond === "health_remaining_lte" || cond === "health_remaining") && stats.healthRemaining > val) return false;
 
     // Health Percent Below & States
-    if (rule.conditionType === "health_percent_below" && stats.healthPercent > val) return false;
-    if (rule.conditionType === "health_torpor" && !stats.isTorpor) return false;
-    if (rule.conditionType === "health_impaired" && !stats.isHealthImpaired) return false;
+    if (cond === "health_percent_below" && stats.healthPercent > val) return false;
+    if (cond === "health_torpor" && !stats.isTorpor) return false;
+    if (cond === "health_impaired" && !stats.isHealthImpaired) return false;
 
     // Willpower Exact Value or Threshold
-    if (rule.conditionType === "willpower_agg_equals" || rule.conditionType === "willpower_aggravated_exact") {
-      if (stats.effectiveWpAgg !== val) return false;
+    if (cond === "willpower_agg_equals" || cond === "willpower_aggravated_exact") {
+      if (stats.effectiveWpAgg !== val && stats.wpAgg !== val) return false;
     }
-    if (rule.conditionType === "willpower_aggravated" && stats.effectiveWpAgg < val) return false;
-
-    if (rule.conditionType === "willpower_sup_equals" || rule.conditionType === "willpower_superficial_exact") {
-      if (stats.effectiveWpSup !== val) return false;
+    if (cond === "willpower_aggravated" || cond === "willpower_agg_gte") {
+      if (stats.effectiveWpAgg < val && stats.wpAgg < val) return false;
     }
-    if (rule.conditionType === "willpower_superficial" && stats.effectiveWpSup < val) return false;
 
-    if (rule.conditionType === "willpower_total_equals" || rule.conditionType === "willpower_total_exact") {
+    if (cond === "willpower_sup_equals" || cond === "willpower_superficial_exact") {
+      if (stats.effectiveWpSup !== val && stats.wpSup !== val) return false;
+    }
+    if (cond === "willpower_superficial" || cond === "willpower_sup_gte") {
+      if (stats.effectiveWpSup < val && stats.wpSup < val) return false;
+    }
+
+    if (cond === "willpower_total_equals" || cond === "willpower_total_exact") {
       if (stats.totalWpDamage !== val) return false;
     }
-    if (rule.conditionType === "willpower_total_gte" && stats.totalWpDamage < val) return false;
-    if (rule.conditionType === "willpower_impaired" && !stats.isWpImpaired) return false;
+    if (cond === "willpower_total_gte" || cond === "willpower_total") {
+      if (stats.totalWpDamage < val) return false;
+    }
+    if (cond === "willpower_impaired" && !stats.isWpImpaired) return false;
 
     // Hunger / Rage Value Exact or Threshold
-    if (rule.conditionType === "hunger_equals" || rule.conditionType === "hunger_exact") {
+    if (cond === "hunger_equals" || cond === "hunger_exact") {
       if (stats.hungerVal !== val) return false;
     }
-    if (rule.conditionType === "hunger_gte" && stats.hungerVal < val) return false;
+    if (cond === "hunger_gte" || cond === "hunger") {
+      if (stats.hungerVal < val) return false;
+    }
 
     // Frenzy State Condition Rules
-    if (rule.conditionType === "frenzy_active" && !stats.isFrenzied) return false;
-    if (rule.conditionType === "frenzy_inactive" && stats.isFrenzied) return false;
-    if (rule.conditionType === "frenzy_equals" && (stats.isFrenzied ? 1 : 0) !== val) return false;
-    if (rule.conditionType === "hunger_and_frenzy" && (!stats.isFrenzied || stats.hungerVal < val)) return false;
+    if (cond === "frenzy_active" && !stats.isFrenzied) return false;
+    if (cond === "frenzy_inactive" && stats.isFrenzied) return false;
+    if (cond === "frenzy_equals" && (stats.isFrenzied ? 1 : 0) !== val) return false;
+    if (cond === "hunger_and_frenzy" && (!stats.isFrenzied || stats.hungerVal < val)) return false;
 
     // Combined Rule Checks
     if (rule.requireHungerGte && stats.hungerVal < Number(rule.requireHungerGte)) return false;

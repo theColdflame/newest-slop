@@ -52,7 +52,6 @@ Hooks.once("ready", () => {
 
 // Reactivity Hooks for Real-Time Actor Tracker Updates
 Hooks.on("updateActor", (actor, changes, options, userId) => {
-  // Catch both nested system object changes and dot-notation changes (e.g. "system.health.superficial")
   WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
 });
 
@@ -83,22 +82,36 @@ Hooks.on("updateActiveEffect", onActiveEffectChange);
 
 // Pre-update hook to parse dynamic level mapping and rules JSON before saving
 Hooks.on("preUpdateTile", (tileDoc, changes, options, userId) => {
-  const config = changes.flags?.["wod5e-dynamic-tile-tracker"]?.config;
-  if (!config) return;
+  const expanded = typeof foundry !== "undefined" && foundry.utils?.expandObject 
+    ? foundry.utils.expandObject(changes) 
+    : changes;
 
-  if (typeof config.statMapJson === "string") {
+  const moduleConfig = expanded.flags?.["wod5e-dynamic-tile-tracker"]?.config || 
+                       changes.flags?.["wod5e-dynamic-tile-tracker"]?.config;
+
+  if (!moduleConfig) return;
+
+  if (typeof moduleConfig.statMapJson === "string") {
     try {
-      config.statMap = JSON.parse(config.statMapJson);
-      delete config.statMapJson;
+      const parsed = JSON.parse(moduleConfig.statMapJson);
+      if (changes.flags?.["wod5e-dynamic-tile-tracker"]?.config) {
+        changes.flags["wod5e-dynamic-tile-tracker"].config.statMap = parsed;
+      } else {
+        changes["flags.wod5e-dynamic-tile-tracker.config.statMap"] = parsed;
+      }
     } catch (e) {
       console.error("WoD5e Dynamic Tile Tracker | Error parsing statMapJson in preUpdateTile:", e);
     }
   }
 
-  if (typeof config.rulesJson === "string") {
+  if (typeof moduleConfig.rulesJson === "string") {
     try {
-      config.rules = JSON.parse(config.rulesJson);
-      delete config.rulesJson;
+      const parsed = JSON.parse(moduleConfig.rulesJson);
+      if (changes.flags?.["wod5e-dynamic-tile-tracker"]?.config) {
+        changes.flags["wod5e-dynamic-tile-tracker"].config.rules = parsed;
+      } else {
+        changes["flags.wod5e-dynamic-tile-tracker.config.rules"] = parsed;
+      }
     } catch (e) {
       console.error("WoD5e Dynamic Tile Tracker | Error parsing rulesJson in preUpdateTile:", e);
     }
@@ -107,8 +120,9 @@ Hooks.on("preUpdateTile", (tileDoc, changes, options, userId) => {
 
 // Re-eval Tile when Tile Document is Updated or Created
 Hooks.on("updateTile", (tileDoc, changes, options, userId) => {
-  const flags = changes.flags?.["wod5e-dynamic-tile-tracker"];
-  if (flags) {
+  const hasModuleFlags = changes.flags?.["wod5e-dynamic-tile-tracker"] ||
+                         Object.keys(changes).some(k => k.startsWith("flags.wod5e-dynamic-tile-tracker"));
+  if (hasModuleFlags) {
     WoD5eTileTrackerEngine.debouncedEvaluateTile(tileDoc);
   }
 });
