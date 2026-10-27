@@ -381,7 +381,7 @@ function App() {
     hunger: DEFAULT_HUNGER_LEVEL_MAP,
     frenzy: DEFAULT_FRENZY_LEVEL_MAP
   });
-  const [autoFillPattern, setAutoFillPattern] = useState("modules/wod5e-dynamic-tile-tracker/assets/{type}_{level}.webp");
+  const [autoFillPattern, setAutoFillPattern] = useState("assets/wod5e/{type}_{level}.webp");
   const [defaultImage, setDefaultImage] = useState(DEFAULT_HUNGER_LEVEL_MAP["0"]);
 
   const statLevelImages = allStatMaps[statMapType] || {};
