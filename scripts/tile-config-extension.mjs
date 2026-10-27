@@ -621,6 +621,7 @@ export class WoD5eTileConfigExtension {
               <option value="hunger_equals" ${rule.conditionType === "hunger_equals" ? "selected" : ""}>Hunger Exact Match (=)</option>
               <option value="hunger_gte" ${rule.conditionType === "hunger_gte" ? "selected" : ""}>Hunger Greater Than or Equal (>=)</option>
               <option value="health_torpor" ${rule.conditionType === "health_torpor" ? "selected" : ""}>Incapacitated / Torpor State</option>
+              <option value="health_impaired" ${rule.conditionType === "health_impaired" ? "selected" : ""}>Health Impaired State</option>
               <option value="health_agg_equals" ${rule.conditionType === "health_agg_equals" ? "selected" : ""}>Aggravated Health Exact Match (=)</option>
               <option value="health_aggravated" ${rule.conditionType === "health_aggravated" ? "selected" : ""}>Aggravated Health Damage (>=)</option>
               <option value="health_sup_equals" ${rule.conditionType === "health_sup_equals" ? "selected" : ""}>Superficial Health Exact Match (=)</option>
@@ -628,7 +629,12 @@ export class WoD5eTileConfigExtension {
               <option value="health_total_equals" ${rule.conditionType === "health_total_equals" ? "selected" : ""}>Total Health Damage Exact Match (=)</option>
               <option value="health_total_gte" ${rule.conditionType === "health_total_gte" ? "selected" : ""}>Total Health Damage (>=)</option>
               <option value="health_percent_below" ${rule.conditionType === "health_percent_below" ? "selected" : ""}>Health Percent Below (<= %)</option>
+              <option value="willpower_agg_equals" ${rule.conditionType === "willpower_agg_equals" ? "selected" : ""}>Aggravated Willpower Exact Match (=)</option>
               <option value="willpower_aggravated" ${rule.conditionType === "willpower_aggravated" ? "selected" : ""}>Aggravated Willpower Damage (>=)</option>
+              <option value="willpower_sup_equals" ${rule.conditionType === "willpower_sup_equals" ? "selected" : ""}>Superficial Willpower Exact Match (=)</option>
+              <option value="willpower_superficial" ${rule.conditionType === "willpower_superficial" ? "selected" : ""}>Superficial Willpower Damage (>=)</option>
+              <option value="willpower_total_gte" ${rule.conditionType === "willpower_total_gte" ? "selected" : ""}>Total Willpower Damage (>=)</option>
+              <option value="willpower_impaired" ${rule.conditionType === "willpower_impaired" ? "selected" : ""}>Willpower Impaired State</option>
             </select>
 
             <input type="number" class="rule-cond-val" value="${rule.value ?? 1}" min="0" max="100" style="width: 60px;" placeholder="Value"/>

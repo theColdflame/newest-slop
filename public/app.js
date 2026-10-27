@@ -182,16 +182,39 @@ function App() {
     for (const rule of rules) {
       if (!rule.enabled) continue;
       
+      const val = Number(rule.value ?? 0);
+      const cond = rule.conditionType;
       let matched = false;
-      if (rule.conditionType === "frenzy_active" && stats.isFrenzied) matched = true;
-      else if (rule.conditionType === "frenzy_inactive" && !stats.isFrenzied) matched = true;
-      else if (rule.conditionType === "hunger_and_frenzy" && stats.isFrenzied && stats.hungerVal >= rule.value) matched = true;
-      else if (rule.conditionType === "health_torpor" && stats.isTorpor) matched = true;
-      else if (rule.conditionType === "health_aggravated" && stats.effectiveHealthAgg >= rule.value) matched = true;
-      else if (rule.conditionType === "health_superficial" && stats.effectiveHealthSup >= rule.value) matched = true;
-      else if (rule.conditionType === "health_total_equals" && stats.totalHealthDamage === rule.value) matched = true;
-      else if (rule.conditionType === "hunger_equals" && stats.hungerVal === rule.value) matched = true;
-      else if (rule.conditionType === "hunger_gte" && stats.hungerVal >= rule.value) matched = true;
+
+      switch (cond) {
+        case "frenzy_active": matched = isFrenzied; break;
+        case "frenzy_inactive": matched = !isFrenzied; break;
+        case "frenzy_equals": matched = (isFrenzied ? 1 : 0) === val; break;
+        case "hunger_and_frenzy": matched = isFrenzied && hungerVal >= val; break;
+        case "hunger_equals": case "hunger_exact": matched = hungerVal === val; break;
+        case "hunger_gte": case "hunger": matched = hungerVal >= val; break;
+        case "health_torpor": matched = isTorpor; break;
+        case "health_impaired": matched = isHealthImpaired; break;
+        case "health_agg_equals": case "health_aggravated_exact": matched = effectiveHealthAgg === val || healthAgg === val; break;
+        case "health_aggravated": case "health_agg_gte": case "health_aggravated_gte": case "health_agg": matched = effectiveHealthAgg >= val || healthAgg >= val; break;
+        case "health_sup_equals": case "health_superficial_exact": matched = effectiveHealthSup === val || healthSup === val; break;
+        case "health_superficial": case "health_sup_gte": case "health_superficial_gte": case "health_sup": matched = effectiveHealthSup >= val || healthSup >= val; break;
+        case "health_total_equals": case "health_total_exact": matched = totalHealthDamage === val; break;
+        case "health_total_gte": case "health_total": matched = totalHealthDamage >= val; break;
+        case "health_remaining_equals": matched = healthRemaining === val; break;
+        case "health_remaining_lte": case "health_remaining": matched = healthRemaining <= val; break;
+        case "health_percent_below": matched = healthPercent <= val; break;
+        case "willpower_aggravated": case "willpower_agg_gte": case "willpower_agg": matched = effectiveWpAgg >= val || wpAgg >= val; break;
+        case "willpower_agg_equals": case "willpower_aggravated_exact": matched = effectiveWpAgg === val || wpAgg === val; break;
+        case "willpower_superficial": case "willpower_sup_gte": case "willpower_superficial_gte": case "willpower_sup": matched = effectiveWpSup >= val || wpSup >= val; break;
+        case "willpower_sup_equals": case "willpower_superficial_exact": matched = effectiveWpSup === val || wpSup === val; break;
+        case "willpower_total_equals": matched = totalWpDamage === val; break;
+        case "willpower_total_gte": matched = totalWpDamage >= val; break;
+        case "willpower_remaining_equals": matched = wpRemaining === val; break;
+        case "willpower_remaining_lte": matched = wpRemaining <= val; break;
+        case "willpower_impaired": matched = isWpImpaired; break;
+        default: matched = false; break;
+      }
 
       if (matched) {
         if (rule.hideTile || isNoTile(rule.image)) {
