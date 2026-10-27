@@ -1,8 +1,10 @@
 /**
  * Injects WoD5e Dynamic Tile Tracker Settings Tab into Foundry VTT v14 Tile Config Sheet
  * Allows setting specific images per level of a stat (Hunger 0..5, Frenzy, Health Damage, Willpower)
- * with FilePicker 'Browse File' buttons and support for hiding tiles completely (__NONE__).
+ * with FilePicker 'Browse File' buttons, live bound actor status monitor, and support for hiding tiles completely (__NONE__).
  */
+
+import { WoD5eTileTrackerEngine } from "./wod5e-tile-tracker.mjs";
 
 export class WoD5eTileConfigExtension {
   static attachTab(app, html, data) {
@@ -76,18 +78,66 @@ export class WoD5eTileConfigExtension {
       tabContent.setAttribute('data-group', 'primary');
       tabContent.style.padding = '10px 4px';
 
-      // Options for Actors dropdown
-      const actorOptions = (game.actors || [])
-        .map(a => `<option value="${a.id}" ${a.id === config.actorId ? "selected" : ""}>${a.name} (${a.type || "Actor"})</option>`)
-        .join('');
+      // Build options for Actors dropdown (World Actors & Token Actors on scene)
+      const actorList = [];
+      const seenIds = new Set();
+
+      if (typeof game !== "undefined" && game.actors) {
+        game.actors.forEach(a => {
+          actorList.push({ id: a.id, uuid: a.uuid, name: a.name, type: a.type || "World Actor" });
+          seenIds.add(a.id);
+          if (a.uuid) seenIds.add(a.uuid);
+        });
+      }
+
+      if (typeof canvas !== "undefined" && canvas.tokens) {
+        canvas.tokens.placeables.forEach(t => {
+          if (t.actor && !seenIds.has(t.actor.id)) {
+            actorList.push({ id: t.actor.id, uuid: t.actor.uuid, name: `${t.name} (Token)`, type: "Scene Token" });
+            seenIds.add(t.actor.id);
+            if (t.actor.uuid) seenIds.add(t.actor.uuid);
+          }
+        });
+      }
+
+      // Resolve currently bound actor to prevent accidental reassignment or reset
+      let currentBoundActor = null;
+      let isExplicitlySelected = false;
+
+      const currentActorId = config.actorId || "";
+      if (currentActorId) {
+        if (typeof fromUuidSync === "function") {
+          try { currentBoundActor = fromUuidSync(currentActorId); } catch(e){}
+        }
+        if (!currentBoundActor && typeof game !== "undefined" && game.actors) {
+          currentBoundActor = game.actors.get(currentActorId);
+        }
+        if (!currentBoundActor && typeof canvas !== "undefined" && canvas.tokens) {
+          const tok = canvas.tokens.placeables.find(t => t.actor?.id === currentActorId || t.actor?.uuid === currentActorId);
+          if (tok) currentBoundActor = tok.actor;
+        }
+      }
+
+      let actorOptions = `<option value="">-- Select Scene or World Actor --</option>`;
+      actorList.forEach(a => {
+        const isMatch = (a.id === currentActorId || a.uuid === currentActorId);
+        if (isMatch) isExplicitlySelected = true;
+        actorOptions += `<option value="${a.id}" ${isMatch ? "selected" : ""}>${this._escapeHtml(a.name)} [${a.type}]</option>`;
+      });
+
+      // If actor was assigned previously but not in current options, preserve the bound ID!
+      if (currentActorId && !isExplicitlySelected) {
+        const fallbackLabel = currentBoundActor ? currentBoundActor.name : currentActorId;
+        actorOptions += `<option value="${this._escapeHtml(currentActorId)}" selected>Bound Actor: ${this._escapeHtml(fallbackLabel)}</option>`;
+      }
 
       const defaultImgVal = config.defaultImage || tileDoc.texture?.src || "";
 
       tabContent.innerHTML = `
         <div class="wod5e-tracker-config-wrapper" style="display: flex; flex-direction: column; gap: 14px;">
           
-          <!-- Toggle & Actor Selection -->
-          <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 10px;">
+          <!-- Dynamic Updates Toggle & Actor Binding -->
+          <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; padding: 10px;">
             <div class="form-group" style="margin-bottom: 8px;">
               <label style="font-weight: bold; color: #ff6b6b;"><i class="fas fa-power-off"></i> Enable Dynamic Updates</label>
               <div class="form-fields">
@@ -97,19 +147,27 @@ export class WoD5eTileConfigExtension {
 
             <div class="form-group" style="margin-bottom: 8px;">
               <label style="font-weight: bold;"><i class="fas fa-user-shield"></i> Bound WoD5e Actor</label>
-              <div class="form-fields">
-                <select name="flags.wod5e-dynamic-tile-tracker.config.actorId" style="width: 100%;">
-                  <option value="">-- Select Scene or World Actor --</option>
+              <div class="form-fields" style="display: flex; gap: 6px; align-items: center;">
+                <select id="wod5e-actor-select" name="flags.wod5e-dynamic-tile-tracker.config.actorId" style="flex: 1;">
                   ${actorOptions}
                 </select>
+                <button type="button" id="wod5e-actor-clear-btn" class="button" style="padding: 2px 8px; font-size: 0.85em; white-space: nowrap;" title="Unbind Actor">
+                  <i class="fas fa-times"></i> Clear
+                </button>
               </div>
+              <p class="notes" style="font-size: 0.8em; opacity: 0.8; margin-top: 2px;">Tip: You can drag & drop an Actor or Token onto this panel to bind it instantly.</p>
             </div>
 
-            <div class="form-group" style="margin-bottom: 0;">
+            <!-- Live Bound Actor Tracker Monitor Card -->
+            <div id="wod5e-bound-actor-card" style="margin-top: 6px; padding: 8px; background: rgba(0,0,0,0.3); border: 1px dashed rgba(255,255,255,0.2); border-radius: 4px;">
+              <!-- Rendered by JS -->
+            </div>
+
+            <div class="form-group" style="margin-top: 10px; margin-bottom: 0;">
               <label style="font-weight: bold;"><i class="fas fa-image"></i> Default / Fallback Texture</label>
               <div class="form-fields" style="display: flex; gap: 6px; align-items: center;">
-                <input type="text" id="wod5e-default-img-input" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="${this._escapeHtml(defaultImgVal)}" placeholder="tiles/normal.png or __NONE__ to hide" style="flex: 1;"/>
-                <button type="button" id="wod5e-default-img-browse" class="button wod5e-browse-btn" style="white-space: nowrap; padding: 2px 8px; height: 28px; display: flex; align-items: center; gap: 4px;" title="Browse Image File">
+                <input type="text" id="wod5e-default-img-input" name="flags.wod5e-dynamic-tile-tracker.config.defaultImage" value="${this._escapeHtml(defaultImgVal)}" placeholder="assets/wod5e/default.png or __NONE__ to hide" style="flex: 1;"/>
+                <button type="button" id="wod5e-default-img-browse" class="button wod5e-browse-btn" style="white-space: nowrap; padding: 2px 8px; height: 28px; display: flex; align-items: center; gap: 4px;" title="Browse File in Data Directory">
                   <i class="fas fa-folder-open"></i> Browse
                 </button>
                 <label style="font-size: 0.8em; white-space: nowrap; display: flex; align-items: center; gap: 4px; color: #ff8080;" title="Hide tile completely if no rule or map matches">
@@ -128,7 +186,7 @@ export class WoD5eTileConfigExtension {
               </label>
             </h3>
             <p class="notes" style="margin-bottom: 10px; font-size: 0.85em; opacity: 0.85;">
-              Assign a distinct image file for each level (or <code>__NONE__</code> / Hide Tile to display no visual tile at all).
+              Assign a distinct image file in your User Data directory for each stat level (or set to <code>__NONE__</code> / Hide Tile to display no visual tile).
             </p>
 
             <div class="form-group" style="margin-bottom: 10px;">
@@ -142,7 +200,9 @@ export class WoD5eTileConfigExtension {
                   <option value="health_total" ${config.statMap?.statType === "health_total" ? "selected" : ""}>Total Health Damage (0 to 10)</option>
                   <option value="health_remaining" ${config.statMap?.statType === "health_remaining" ? "selected" : ""}>Remaining Health Points (0 to 10)</option>
                   <option value="willpower_agg" ${config.statMap?.statType === "willpower_agg" ? "selected" : ""}>Aggravated Willpower Damage (0 to 10)</option>
+                  <option value="willpower_sup" ${config.statMap?.statType === "willpower_sup" ? "selected" : ""}>Superficial Willpower Damage (0 to 10)</option>
                   <option value="willpower_total" ${config.statMap?.statType === "willpower_total" ? "selected" : ""}>Total Willpower Damage (0 to 10)</option>
+                  <option value="willpower_remaining" ${config.statMap?.statType === "willpower_remaining" ? "selected" : ""}>Remaining Willpower Points (0 to 10)</option>
                 </select>
               </div>
             </div>
@@ -183,6 +243,98 @@ export class WoD5eTileConfigExtension {
       `;
 
       bodyEl.appendChild(tabContent);
+
+      // Render live bound actor monitor
+      const updateActorMonitor = () => {
+        const select = tabContent.querySelector('#wod5e-actor-select');
+        const card = tabContent.querySelector('#wod5e-bound-actor-card');
+        if (!select || !card) return;
+
+        const targetId = select.value;
+        let actor = null;
+        if (targetId) {
+          if (typeof fromUuidSync === "function") {
+            try { actor = fromUuidSync(targetId); } catch(e){}
+          }
+          if (!actor && typeof game !== "undefined" && game.actors) {
+            actor = game.actors.get(targetId);
+          }
+          if (!actor && typeof canvas !== "undefined" && canvas.tokens) {
+            const tok = canvas.tokens.placeables.find(t => t.actor?.id === targetId || t.actor?.uuid === targetId);
+            if (tok) actor = tok.actor;
+          }
+        }
+
+        if (!actor) {
+          card.innerHTML = `<span style="font-size: 0.85em; color: #aaa; font-style: italic;"><i class="fas fa-exclamation-triangle" style="color: #e53e3e;"></i> No actor bound. Dynamic tile tracking inactive.</span>`;
+          return;
+        }
+
+        const stats = WoD5eTileTrackerEngine.extractWoD5eStats(actor);
+
+        // Render health tracker box visualization (Aggravated [X], Superficial [/], Empty [.])
+        let healthBoxesHtml = "";
+        for (let i = 0; i < stats.healthMax; i++) {
+          if (i < stats.effectiveHealthAgg) {
+            healthBoxesHtml += `<span style="display:inline-block; width:14px; height:14px; background:#e53e3e; color:#fff; font-size:10px; text-align:center; line-height:14px; font-weight:bold; border-radius:2px; margin-right:2px;" title="Aggravated Damage">X</span>`;
+          } else if (i < stats.effectiveHealthAgg + stats.effectiveHealthSup) {
+            healthBoxesHtml += `<span style="display:inline-block; width:14px; height:14px; background:#dd6b20; color:#fff; font-size:10px; text-align:center; line-height:14px; font-weight:bold; border-radius:2px; margin-right:2px;" title="Superficial Damage">/</span>`;
+          } else {
+            healthBoxesHtml += `<span style="display:inline-block; width:14px; height:14px; background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.3); border-radius:2px; margin-right:2px;" title="Empty Health Box"></span>`;
+          }
+        }
+
+        let stateBadges = [];
+        if (stats.isTorpor) stateBadges.push(`<span style="background:#742a2a; color:#feb2b2; padding:1px 6px; border-radius:3px; font-size:0.75em; font-weight:bold;">TORPOR</span>`);
+        else if (stats.isHealthImpaired) stateBadges.push(`<span style="background:#9b2c2c; color:#feb2b2; padding:1px 6px; border-radius:3px; font-size:0.75em; font-weight:bold;">IMPAIRED</span>`);
+        if (stats.isFrenzied) stateBadges.push(`<span style="background:#c53030; color:#fff; padding:1px 6px; border-radius:3px; font-size:0.75em; font-weight:bold;"><i class="fas fa-fire"></i> FRENZIED</span>`);
+
+        card.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <strong style="color: #4ecdc4; font-size: 0.9em;"><i class="fas fa-user-check"></i> ${this._escapeHtml(actor.name)}</strong>
+            <div>${stateBadges.join(' ')}</div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 0.8em;">
+            <div><strong>Health:</strong> ${healthBoxesHtml} <span style="opacity: 0.8;">(${stats.effectiveHealthAgg} Agg, ${stats.effectiveHealthSup} Sup)</span></div>
+            <div><strong>Willpower:</strong> ${stats.totalWpDamage} / ${stats.wpMax} Dmg (${stats.effectiveWpAgg} Agg)</div>
+            <div><strong>Hunger / Rage:</strong> Level ${stats.hungerVal} / 5</div>
+            <div><strong>Frenzy State:</strong> ${stats.isFrenzied ? "Active" : "Calm"}</div>
+          </div>
+        `;
+      };
+
+      const selectEl = tabContent.querySelector('#wod5e-actor-select');
+      const clearBtn = tabContent.querySelector('#wod5e-actor-clear-btn');
+
+      selectEl.addEventListener('change', updateActorMonitor);
+      clearBtn.addEventListener('click', () => {
+        selectEl.value = "";
+        updateActorMonitor();
+      });
+
+      // Bind Drag & Drop Actor onto tab content
+      tabContent.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        try {
+          const rawData = ev.dataTransfer.getData('text/plain');
+          if (!rawData) return;
+          const data = JSON.parse(rawData);
+          if (data.type === 'Actor' && data.id) {
+            let foundMatch = Array.from(selectEl.options).some(opt => opt.value === data.id || opt.value === data.uuid);
+            if (!foundMatch) {
+              const opt = document.createElement('option');
+              opt.value = data.id;
+              opt.textContent = `Dropped Actor (${data.id})`;
+              opt.selected = true;
+              selectEl.appendChild(opt);
+            }
+            selectEl.value = data.id;
+            updateActorMonitor();
+          }
+        } catch (e) {}
+      });
+
+      updateActorMonitor();
 
       // Bind Default Image Browse File button
       const defaultImgInput = tabContent.querySelector('#wod5e-default-img-input');
@@ -237,7 +389,7 @@ export class WoD5eTileConfigExtension {
 
       let currentPath = inputEl.value || "";
 
-      // Default to User Data ("data") source
+      // Explicit default to User Data ("data") source
       let fileSource = options.source || "data";
       try {
         if (typeof game !== "undefined" && game.settings) {
@@ -335,18 +487,15 @@ export class WoD5eTileConfigExtension {
           else if (i === 5) labelText = `Hunger 5 (Bestial / Starving)`;
           else labelText = `Hunger ${i}`;
         } else if (type === "health_agg") {
-          if (i === 0) labelText = `0 Aggravated Damage`;
-          else labelText = `${i} Aggravated Damage`;
+          labelText = `${i} Aggravated Damage`;
         } else if (type === "health_sup") {
-          if (i === 0) labelText = `0 Superficial Damage`;
-          else labelText = `${i} Superficial Damage`;
+          labelText = `${i} Superficial Damage`;
         } else if (type === "health_remaining") {
-          if (i === 0) labelText = `0 HP Left (Torpor / Incap)`;
-          else labelText = `${i} HP Remaining`;
+          labelText = `${i} HP Remaining`;
         } else if (type === "health_total") {
           labelText = `${i} Total Damage`;
         } else if (type.startsWith("willpower")) {
-          labelText = `Willpower ${i} Damage`;
+          labelText = `Willpower ${i}`;
         }
 
         const row = document.createElement('div');
@@ -355,8 +504,8 @@ export class WoD5eTileConfigExtension {
           <span style="width: 150px; font-size: 0.82em; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${labelText}">
             ${labelText}
           </span>
-          <input type="text" data-level="${i}" class="wod5e-level-img-input" value="${this._escapeHtml(existingImg)}" placeholder="Path or __NONE__ to hide tile..." style="flex: 1; font-size: 0.85em;"/>
-          <button type="button" class="button wod5e-level-browse-btn" style="white-space: nowrap; padding: 2px 8px; font-size: 0.82em; height: 26px; display: flex; align-items: center; gap: 4px;" title="Browse File">
+          <input type="text" data-level="${i}" class="wod5e-level-img-input" value="${this._escapeHtml(existingImg)}" placeholder="assets/wod5e/${type}_${i}.webp or __NONE__" style="flex: 1; font-size: 0.85em;"/>
+          <button type="button" class="button wod5e-level-browse-btn" style="white-space: nowrap; padding: 2px 8px; font-size: 0.82em; height: 26px; display: flex; align-items: center; gap: 4px;" title="Browse File in Data Directory">
             <i class="fas fa-folder-open"></i> Browse
           </button>
           <button type="button" class="button wod5e-level-hide-btn" style="white-space: nowrap; padding: 2px 6px; font-size: 0.8em; height: 26px; color: #ff8080;" title="Set to hide tile">
@@ -473,6 +622,8 @@ export class WoD5eTileConfigExtension {
               <option value="health_aggravated" ${rule.conditionType === "health_aggravated" ? "selected" : ""}>Aggravated Health Damage (>=)</option>
               <option value="health_sup_equals" ${rule.conditionType === "health_sup_equals" ? "selected" : ""}>Superficial Health Exact Match (=)</option>
               <option value="health_superficial" ${rule.conditionType === "health_superficial" ? "selected" : ""}>Superficial Health Damage (>=)</option>
+              <option value="health_total_equals" ${rule.conditionType === "health_total_equals" ? "selected" : ""}>Total Health Damage Exact Match (=)</option>
+              <option value="health_total_gte" ${rule.conditionType === "health_total_gte" ? "selected" : ""}>Total Health Damage (>=)</option>
               <option value="health_percent_below" ${rule.conditionType === "health_percent_below" ? "selected" : ""}>Health Percent Below (<= %)</option>
               <option value="willpower_aggravated" ${rule.conditionType === "willpower_aggravated" ? "selected" : ""}>Aggravated Willpower Damage (>=)</option>
             </select>
@@ -481,8 +632,8 @@ export class WoD5eTileConfigExtension {
           </div>
 
           <div class="rule-img-row" style="display: ${isHide ? "none" : "flex"}; gap: 6px; align-items: center;">
-            <input type="text" class="rule-img-src" value="${this._escapeHtml(rule.image || "")}" placeholder="Image path (e.g. tiles/frenzy.png)" style="flex: 1;"/>
-            <button type="button" class="button rule-browse-btn" style="white-space: nowrap; padding: 2px 8px; font-size: 0.82em; height: 26px; display: flex; align-items: center; gap: 4px;" title="Browse Image File">
+            <input type="text" class="rule-img-src" value="${this._escapeHtml(rule.image || "")}" placeholder="assets/wod5e/frenzy.png" style="flex: 1;"/>
+            <button type="button" class="button rule-browse-btn" style="white-space: nowrap; padding: 2px 8px; font-size: 0.82em; height: 26px; display: flex; align-items: center; gap: 4px;" title="Browse File in Data Directory">
               <i class="fas fa-folder-open"></i> Browse
             </button>
             <input type="color" class="rule-tint" value="${rule.tint || "#ffffff"}" title="Optional Tint Color"/>

@@ -28,6 +28,21 @@ Hooks.once("init", () => {
     type: Number,
     default: 150
   });
+
+  game.settings.register("wod5e-dynamic-tile-tracker", "defaultFileSource", {
+    name: game.i18n.localize("WOD5E_TILE.SettingsDefaultFileSource") || "Default File Picker Storage Location",
+    hint: game.i18n.localize("WOD5E_TILE.SettingsDefaultFileSourceHint") || "Path through User Data directory (Data/), S3, Forge, or Public.",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: {
+      "data": "User Data Directory (Data/) [Default]",
+      "s3": "Amazon S3 Storage (s3)",
+      "forgevtt": "The Forge VTT Storage (forgevtt)",
+      "public": "Core / Public Packages (public)"
+    },
+    default: "data"
+  });
 });
 
 Hooks.once("ready", () => {
@@ -37,16 +52,18 @@ Hooks.once("ready", () => {
 
 // Reactivity Hooks for Real-Time Actor Tracker Updates
 Hooks.on("updateActor", (actor, changes, options, userId) => {
-  const sys = changes.system;
-  if (!sys) return;
-
-  const healthChanged = "health" in sys;
-  const willpowerChanged = "willpower" in sys;
-  const hungerChanged = "hunger" in sys || "rage" in sys || "desperation" in sys;
-  const frenzyChanged = "frenzy" in sys || "isFrenzied" in sys;
-
-  if (healthChanged || willpowerChanged || hungerChanged || frenzyChanged) {
+  if (changes.system || changes.statuses) {
     WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
+  }
+});
+
+// Reactivity Hooks for Token Document Updates (Synthetic Tokens)
+Hooks.on("updateToken", (tokenDoc, changes, options, userId) => {
+  if (changes.actorData || changes.delta || changes.actorLink === false) {
+    const actor = tokenDoc.actor;
+    if (actor) {
+      WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
+    }
   }
 });
 
@@ -54,8 +71,8 @@ Hooks.on("updateActor", (actor, changes, options, userId) => {
 const onActiveEffectChange = (effect) => {
   const actor = effect.parent;
   if (actor && actor.documentName === "Actor") {
-    const isFrenzyEffect = effect.name?.toLowerCase().includes("frenzy") || 
-                           effect.label?.toLowerCase().includes("frenzy") ||
+    const nameStr = (effect.name || effect.label || "").toLowerCase();
+    const isFrenzyEffect = nameStr.includes("frenzy") || 
                            (effect.statuses && (effect.statuses.has("frenzy") || effect.statuses.has("frenzied")));
     if (isFrenzyEffect) {
       WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
@@ -95,7 +112,7 @@ Hooks.on("preUpdateTile", (tileDoc, changes, options, userId) => {
 Hooks.on("updateTile", (tileDoc, changes, options, userId) => {
   const flags = changes.flags?.["wod5e-dynamic-tile-tracker"];
   if (flags) {
-    WoD5eTileTrackerEngine.evaluateTile(tileDoc);
+    WoD5eTileTrackerEngine.debouncedEvaluateTile(tileDoc);
   }
 });
 
