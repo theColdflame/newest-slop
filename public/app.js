@@ -88,6 +88,7 @@ function App() {
   const [isDownloading, setIsDownloading] = useState(false);
 
   // Stat level maps per stat type
+  const [statMapEnabled, setStatMapEnabled] = useState(true);
   const [statMapType, setStatMapType] = useState("hunger");
   const [allStatMaps, setAllStatMaps] = useState({
     hunger: DEFAULT_HUNGER_LEVEL_MAP,
@@ -122,6 +123,8 @@ function App() {
   const effectiveWpAgg = Math.min(wpMax, Math.max(0, wpAgg));
   const effectiveWpSup = Math.min(Math.max(0, wpSup), Math.max(0, wpMax - effectiveWpAgg));
   const totalWpDamage = Math.min(wpMax, effectiveWpAgg + effectiveWpSup);
+  const wpRemaining = Math.max(0, wpMax - totalWpDamage);
+  const isWpImpaired = totalWpDamage >= wpMax;
 
   // Helper to check if string means no visual tile
   const isNoTile = (val) => {
@@ -146,7 +149,7 @@ function App() {
       default: currentVal = 0;
     }
 
-    if (statLevelImages) {
+    if (statMapEnabled && statLevelImages) {
       const levelImg = statLevelImages[String(currentVal)];
       if (levelImg && levelImg.trim().length > 0) {
         if (isNoTile(levelImg)) {
