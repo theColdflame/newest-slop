@@ -232,10 +232,10 @@ export class WoD5eTileTrackerEngine {
         currentVal = stats.isFrenzied ? 1 : 0;
         break;
       case "health_agg":
-        currentVal = stats.effectiveHealthAgg;
+        currentVal = stats.effectiveHealthAgg !== undefined ? stats.effectiveHealthAgg : stats.healthAgg;
         break;
       case "health_sup":
-        currentVal = stats.effectiveHealthSup;
+        currentVal = stats.effectiveHealthSup !== undefined ? stats.effectiveHealthSup : stats.healthSup;
         break;
       case "health_total":
         currentVal = stats.totalHealthDamage;
@@ -244,10 +244,10 @@ export class WoD5eTileTrackerEngine {
         currentVal = stats.healthRemaining;
         break;
       case "willpower_agg":
-        currentVal = stats.effectiveWpAgg;
+        currentVal = stats.effectiveWpAgg !== undefined ? stats.effectiveWpAgg : stats.wpAgg;
         break;
       case "willpower_sup":
-        currentVal = stats.effectiveWpSup;
+        currentVal = stats.effectiveWpSup !== undefined ? stats.effectiveWpSup : stats.wpSup;
         break;
       case "willpower_total":
         currentVal = stats.totalWpDamage;
@@ -277,17 +277,36 @@ export class WoD5eTileTrackerEngine {
     const getVal = (v) => {
       if (v === null || v === undefined) return 0;
       if (typeof v === "number") return isNaN(v) ? 0 : v;
-      if (typeof v === "object") return getVal(v.value ?? v.max ?? v.current);
+      if (typeof v === "object") {
+        if (v.value !== undefined && v.value !== null) return getVal(v.value);
+        if (v.current !== undefined && v.current !== null) return getVal(v.current);
+        if (v.damage !== undefined && v.damage !== null) return getVal(v.damage);
+        if (v.amount !== undefined && v.amount !== null) return getVal(v.amount);
+        return 0;
+      }
       const parsed = Number(v);
       return isNaN(parsed) ? 0 : parsed;
     };
 
     // 1. Health Tracker (WoD5e System 5.3.28: system.health or system.attributes.health)
-    const health = sys.health || sys.attributes?.health || { max: 6, aggravated: 0, superficial: 0 };
-    const healthMax = Math.max(1, getVal(health.max ?? health.value ?? 6));
+    const health = sys.health || sys.attributes?.health || {};
+    const healthMax = Math.max(1, getVal(health.max ?? health.value ?? health.maxHealth ?? 6));
 
-    const rawAgg = getVal(health.aggravated ?? health.agg);
-    const rawSup = getVal(health.superficial ?? health.sup);
+    const rawAgg = getVal(
+      health.aggravated ??
+      health.agg ??
+      health.aggravatedDamage ??
+      health.damage?.aggravated ??
+      0
+    );
+
+    const rawSup = getVal(
+      health.superficial ??
+      health.sup ??
+      health.superficialDamage ??
+      health.damage?.superficial ??
+      0
+    );
 
     let effectiveHealthAgg = Math.max(0, rawAgg);
     let effectiveHealthSup = Math.max(0, rawSup);
@@ -311,11 +330,24 @@ export class WoD5eTileTrackerEngine {
     const isHealthImpaired = totalHealthDamage >= healthMax;
 
     // 2. Willpower Tracker
-    const willpower = sys.willpower || sys.attributes?.willpower || { max: 6, aggravated: 0, superficial: 0 };
+    const willpower = sys.willpower || sys.attributes?.willpower || {};
     const wpMax = Math.max(1, getVal(willpower.max ?? willpower.value ?? 6));
 
-    const rawWpAgg = getVal(willpower.aggravated ?? willpower.agg);
-    const rawWpSup = getVal(willpower.superficial ?? willpower.sup);
+    const rawWpAgg = getVal(
+      willpower.aggravated ??
+      willpower.agg ??
+      willpower.aggravatedDamage ??
+      willpower.damage?.aggravated ??
+      0
+    );
+
+    const rawWpSup = getVal(
+      willpower.superficial ??
+      willpower.sup ??
+      willpower.superficialDamage ??
+      willpower.damage?.superficial ??
+      0
+    );
 
     let effectiveWpAgg = Math.max(0, rawWpAgg);
     let effectiveWpSup = Math.max(0, rawWpSup);
@@ -395,15 +427,15 @@ export class WoD5eTileTrackerEngine {
 
     // Health Aggravated Exact or Threshold
     if (rule.conditionType === "health_agg_equals" || rule.conditionType === "health_aggravated_exact") {
-      if (stats.effectiveHealthAgg !== val) return false;
+      if (stats.effectiveHealthAgg !== val && stats.healthAgg !== val) return false;
     }
-    if (rule.conditionType === "health_aggravated" && stats.effectiveHealthAgg < val) return false;
+    if (rule.conditionType === "health_aggravated" && stats.effectiveHealthAgg < val && stats.healthAgg < val) return false;
 
     // Health Superficial Exact or Threshold
     if (rule.conditionType === "health_sup_equals" || rule.conditionType === "health_superficial_exact") {
-      if (stats.effectiveHealthSup !== val) return false;
+      if (stats.effectiveHealthSup !== val && stats.healthSup !== val) return false;
     }
-    if (rule.conditionType === "health_superficial" && stats.effectiveHealthSup < val) return false;
+    if (rule.conditionType === "health_superficial" && stats.effectiveHealthSup < val && stats.healthSup < val) return false;
 
     // Health Total Damage
     if (rule.conditionType === "health_total_equals" || rule.conditionType === "health_total_exact") {

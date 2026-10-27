@@ -52,18 +52,15 @@ Hooks.once("ready", () => {
 
 // Reactivity Hooks for Real-Time Actor Tracker Updates
 Hooks.on("updateActor", (actor, changes, options, userId) => {
-  if (changes.system || changes.statuses) {
-    WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
-  }
+  // Catch both nested system object changes and dot-notation changes (e.g. "system.health.superficial")
+  WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
 });
 
 // Reactivity Hooks for Token Document Updates (Synthetic Tokens)
 Hooks.on("updateToken", (tokenDoc, changes, options, userId) => {
-  if (changes.actorData || changes.delta || changes.actorLink === false) {
-    const actor = tokenDoc.actor;
-    if (actor) {
-      WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
-    }
+  const actor = tokenDoc.actor;
+  if (actor) {
+    WoD5eTileTrackerEngine.onActorTrackerUpdated(actor);
   }
 });
 
