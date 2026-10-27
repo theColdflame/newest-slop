@@ -15,7 +15,7 @@ const app = new Hono()
     const manifest = {
       id: "wod5e-dynamic-tile-tracker",
       title: "World of Darkness 5e - Dynamic Tile Tracker",
-      description: "Foundry VTT v14 module for World of Darkness 5e (5.3.28) that updates tile textures, tints, and overlays in real-time based on Actor Health, Willpower, and Hunger/Rage trackers.",
+      description: "Foundry VTT v14 module for World of Darkness 5e (5.3.28) that updates tile textures, tints, and overlays in real-time based on Actor Health, Willpower, Hunger, Rage, and Frenzy trackers.",
       version: "1.0.0",
       compatibility: {
         minimum: "14",
@@ -71,7 +71,14 @@ export default {
       return app.fetch(request, env);
     }
 
-    // Serve static assets from public/ directory
-    return env.ASSETS.fetch(request);
+    try {
+      const response = await env.ASSETS.fetch(request);
+      if (response.status === 404 && !url.pathname.includes(".")) {
+        return await env.ASSETS.fetch(new URL("/", request.url));
+      }
+      return response;
+    } catch {
+      return env.ASSETS.fetch(request);
+    }
   }
 };
