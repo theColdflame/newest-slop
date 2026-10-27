@@ -17,23 +17,27 @@ export class WoD5eTileTrackerEngine {
   static onActorTrackerUpdated(actor) {
     if (!actor) return;
 
-    const scene = canvas.scene;
+    const scene = canvas?.scene;
     if (!scene) return;
 
     const actorId = actor.id;
     const actorUuid = actor.uuid;
-    const protoActorId = actor.prototypeToken?.actor?.id || actor.token?.actor?.id;
+    const tokenUuid = actor.token?.uuid;
+    const parentTokenUuid = actor.parent?.documentName === "Token" ? actor.parent.uuid : null;
+    const protoActorId = actor.prototypeToken?.actor?.id || actor.prototypeToken?.id;
 
     // Find all tiles in active scene bound to this actor (by ID or UUID)
     const boundTiles = scene.tiles.filter(t => {
       const config = t.getFlag(this.MODULE_ID, "config");
       if (!config || !config.enabled) return false;
-      const targetId = config.actorId;
+      const targetId = (config.actorId || "").trim();
       if (!targetId) return false;
 
       return (
         targetId === actorId ||
         targetId === actorUuid ||
+        (tokenUuid && targetId === tokenUuid) ||
+        (parentTokenUuid && targetId === parentTokenUuid) ||
         (protoActorId && targetId === protoActorId)
       );
     });
@@ -81,18 +85,27 @@ export class WoD5eTileTrackerEngine {
     // Resolve bound actor by ID or UUID
     let actor = actorOverride;
     if (!actor && config.actorId) {
+      const targetId = (config.actorId || "").trim();
       if (typeof fromUuidSync === "function") {
         try {
-          actor = fromUuidSync(config.actorId);
+          const resolved = fromUuidSync(targetId);
+          if (resolved) {
+            actor = resolved.documentName === "Token" ? resolved.actor : (resolved.actor || resolved);
+          }
         } catch (e) {
           actor = null;
         }
       }
-      if (!actor && game.actors) {
-        actor = game.actors.get(config.actorId);
+      if (!actor && typeof game !== "undefined" && game.actors) {
+        actor = game.actors.get(targetId);
       }
-      if (!actor && canvas.tokens) {
-        const token = canvas.tokens.placeables.find(t => t.actor?.id === config.actorId || t.actor?.uuid === config.actorId);
+      if (!actor && typeof canvas !== "undefined" && canvas.tokens) {
+        const token = canvas.tokens.placeables.find(t => 
+          t.actor?.id === targetId || 
+          t.actor?.uuid === targetId || 
+          t.id === targetId ||
+          t.document?.uuid === targetId
+        );
         if (token) actor = token.actor;
       }
     }
@@ -256,32 +269,41 @@ export class WoD5eTileTrackerEngine {
 
   /**
    * Extract Health, Willpower, Hunger, Frenzy trackers according to WoD5e 5.3.28 system schema
-   * Correctly accounting for combined Superficial and Aggravated damage boxes & overflow.
+   * Correctly accounting for combined Superficial and Aggravated damage boxes & V5 overflow rules.
    */
   static extractWoD5eStats(actor) {
     const sys = actor.system || {};
 
+    const getVal = (v) => {
+      if (v === null || v === undefined) return 0;
+      if (typeof v === "number") return isNaN(v) ? 0 : v;
+      if (typeof v === "object") return getVal(v.value ?? v.max ?? v.current);
+      const parsed = Number(v);
+      return isNaN(parsed) ? 0 : parsed;
+    };
+
     // 1. Health Tracker (WoD5e System 5.3.28: system.health or system.attributes.health)
     const health = sys.health || sys.attributes?.health || { max: 6, aggravated: 0, superficial: 0 };
-    const rawHealthMax = Number(health.max ?? health.value ?? 6);
-    const healthMax = Math.max(1, isNaN(rawHealthMax) ? 6 : rawHealthMax);
+    const healthMax = Math.max(1, getVal(health.max ?? health.value ?? 6));
 
-    const rawAgg = Number(health.aggravated ?? health.agg ?? 0);
-    const rawSup = Number(health.superficial ?? health.sup ?? 0);
+    const rawAgg = getVal(health.aggravated ?? health.agg);
+    const rawSup = getVal(health.superficial ?? health.sup);
 
-    const healthAgg = Math.max(0, isNaN(rawAgg) ? 0 : rawAgg);
-    const healthSup = Math.max(0, isNaN(rawSup) ? 0 : rawSup);
+    let effectiveHealthAgg = Math.max(0, rawAgg);
+    let effectiveHealthSup = Math.max(0, rawSup);
 
-    // Total health damage capped to maximum health tracker size
-    const totalHealthDamage = Math.min(healthMax, healthAgg + healthSup);
-    
-    // Aggravated damage takes precedence on the tracker boxes.
-    // Effective Aggravated cannot exceed health max.
-    const effectiveHealthAgg = Math.min(healthMax, healthAgg);
+    // WoD5e V5 Overflow Rule: When superficial + aggravated > max health,
+    // excess superficial converts to aggravated damage box-for-box
+    if (effectiveHealthAgg + effectiveHealthSup > healthMax) {
+      const overflow = (effectiveHealthAgg + effectiveHealthSup) - healthMax;
+      effectiveHealthAgg = Math.min(healthMax, effectiveHealthAgg + overflow);
+      effectiveHealthSup = Math.max(0, healthMax - effectiveHealthAgg);
+    } else {
+      effectiveHealthAgg = Math.min(healthMax, effectiveHealthAgg);
+      effectiveHealthSup = Math.min(effectiveHealthSup, Math.max(0, healthMax - effectiveHealthAgg));
+    }
 
-    // Effective Superficial occupies remaining damaged boxes (if both agg & sup are set).
-    const effectiveHealthSup = Math.min(healthSup, Math.max(0, healthMax - effectiveHealthAgg));
-
+    const totalHealthDamage = Math.min(healthMax, effectiveHealthAgg + effectiveHealthSup);
     const healthRemaining = Math.max(0, healthMax - totalHealthDamage);
     const healthPercent = Math.max(0, Math.min(100, Math.round((healthRemaining / healthMax) * 100)));
 
@@ -290,23 +312,29 @@ export class WoD5eTileTrackerEngine {
 
     // 2. Willpower Tracker
     const willpower = sys.willpower || sys.attributes?.willpower || { max: 6, aggravated: 0, superficial: 0 };
-    const rawWpMax = Number(willpower.max ?? willpower.value ?? 6);
-    const wpMax = Math.max(1, isNaN(rawWpMax) ? 6 : rawWpMax);
+    const wpMax = Math.max(1, getVal(willpower.max ?? willpower.value ?? 6));
 
-    const rawWpAgg = Number(willpower.aggravated ?? willpower.agg ?? 0);
-    const rawWpSup = Number(willpower.superficial ?? willpower.sup ?? 0);
+    const rawWpAgg = getVal(willpower.aggravated ?? willpower.agg);
+    const rawWpSup = getVal(willpower.superficial ?? willpower.sup);
 
-    const wpAgg = Math.max(0, isNaN(rawWpAgg) ? 0 : rawWpAgg);
-    const wpSup = Math.max(0, isNaN(rawWpSup) ? 0 : rawWpSup);
+    let effectiveWpAgg = Math.max(0, rawWpAgg);
+    let effectiveWpSup = Math.max(0, rawWpSup);
 
-    const totalWpDamage = Math.min(wpMax, wpAgg + wpSup);
-    const effectiveWpAgg = Math.min(wpMax, wpAgg);
-    const effectiveWpSup = Math.min(wpSup, Math.max(0, wpMax - effectiveWpAgg));
+    if (effectiveWpAgg + effectiveWpSup > wpMax) {
+      const wpOverflow = (effectiveWpAgg + effectiveWpSup) - wpMax;
+      effectiveWpAgg = Math.min(wpMax, effectiveWpAgg + wpOverflow);
+      effectiveWpSup = Math.max(0, wpMax - effectiveWpAgg);
+    } else {
+      effectiveWpAgg = Math.min(wpMax, effectiveWpAgg);
+      effectiveWpSup = Math.min(effectiveWpSup, Math.max(0, wpMax - effectiveWpAgg));
+    }
+
+    const totalWpDamage = Math.min(wpMax, effectiveWpAgg + effectiveWpSup);
     const wpRemaining = Math.max(0, wpMax - totalWpDamage);
     const isWpImpaired = totalWpDamage >= wpMax;
 
     // 3. Hunger / Rage / Desperation (0..5)
-    const rawHunger = Number(
+    const rawHunger = getVal(
       sys.hunger?.value ??
       sys.hunger ??
       sys.rage?.value ??
@@ -315,7 +343,7 @@ export class WoD5eTileTrackerEngine {
       sys.desperation ??
       0
     );
-    const hungerVal = Math.max(0, Math.min(5, isNaN(rawHunger) ? 0 : rawHunger));
+    const hungerVal = Math.max(0, Math.min(5, rawHunger));
 
     // 4. Frenzy State (WoD5e 5.3.28 system schema & active effect statuses)
     const isFrenzied = Boolean(

@@ -80,22 +80,22 @@ export class WoD5eTileConfigExtension {
 
       // Build options for Actors dropdown (World Actors & Token Actors on scene)
       const actorList = [];
-      const seenIds = new Set();
 
       if (typeof game !== "undefined" && game.actors) {
         game.actors.forEach(a => {
-          actorList.push({ id: a.id, uuid: a.uuid, name: a.name, type: a.type || "World Actor" });
-          seenIds.add(a.id);
-          if (a.uuid) seenIds.add(a.uuid);
+          actorList.push({ id: a.id, uuid: a.uuid, name: a.name, type: "World Actor" });
         });
       }
 
       if (typeof canvas !== "undefined" && canvas.tokens) {
         canvas.tokens.placeables.forEach(t => {
-          if (t.actor && !seenIds.has(t.actor.id)) {
-            actorList.push({ id: t.actor.id, uuid: t.actor.uuid, name: `${t.name} (Token)`, type: "Scene Token" });
-            seenIds.add(t.actor.id);
-            if (t.actor.uuid) seenIds.add(t.actor.uuid);
+          if (t.actor) {
+            const tokenActorId = t.actor.id;
+            const tokenUuid = t.actor.uuid || t.document?.uuid;
+            const actorName = t.actor.name || t.name;
+            const isUnlinked = !t.document?.isLinked;
+            const typeStr = isUnlinked ? "Scene Token (Unlinked)" : "Scene Token (Linked)";
+            actorList.push({ id: tokenActorId, uuid: tokenUuid, name: `${actorName} (${t.name})`, type: typeStr });
           }
         });
       }
@@ -104,31 +104,34 @@ export class WoD5eTileConfigExtension {
       let currentBoundActor = null;
       let isExplicitlySelected = false;
 
-      const currentActorId = config.actorId || "";
+      const currentActorId = (config.actorId || "").trim();
       if (currentActorId) {
         if (typeof fromUuidSync === "function") {
-          try { currentBoundActor = fromUuidSync(currentActorId); } catch(e){}
+          try {
+            const resolved = fromUuidSync(currentActorId);
+            if (resolved) currentBoundActor = resolved.documentName === "Token" ? resolved.actor : (resolved.actor || resolved);
+          } catch(e){}
         }
         if (!currentBoundActor && typeof game !== "undefined" && game.actors) {
           currentBoundActor = game.actors.get(currentActorId);
         }
         if (!currentBoundActor && typeof canvas !== "undefined" && canvas.tokens) {
-          const tok = canvas.tokens.placeables.find(t => t.actor?.id === currentActorId || t.actor?.uuid === currentActorId);
+          const tok = canvas.tokens.placeables.find(t => t.actor?.id === currentActorId || t.actor?.uuid === currentActorId || t.id === currentActorId);
           if (tok) currentBoundActor = tok.actor;
         }
       }
 
       let actorOptions = `<option value="">-- Select Scene or World Actor --</option>`;
       actorList.forEach(a => {
-        const isMatch = (a.id === currentActorId || a.uuid === currentActorId);
+        const isMatch = (a.id === currentActorId || (a.uuid && a.uuid === currentActorId));
         if (isMatch) isExplicitlySelected = true;
-        actorOptions += `<option value="${a.id}" ${isMatch ? "selected" : ""}>${this._escapeHtml(a.name)} [${a.type}]</option>`;
+        actorOptions += `<option value="${a.uuid || a.id}" ${isMatch ? "selected" : ""}>${this._escapeHtml(a.name)} [${a.type}]</option>`;
       });
 
-      // If actor was assigned previously but not in current options, preserve the bound ID!
+      // If actor was assigned previously but not in current options list, preserve the bound ID!
       if (currentActorId && !isExplicitlySelected) {
         const fallbackLabel = currentBoundActor ? currentBoundActor.name : currentActorId;
-        actorOptions += `<option value="${this._escapeHtml(currentActorId)}" selected>Bound Actor: ${this._escapeHtml(fallbackLabel)}</option>`;
+        actorOptions += `<option value="${this._escapeHtml(currentActorId)}" selected>Bound Actor: ${this._escapeHtml(fallbackLabel)} (${this._escapeHtml(currentActorId)})</option>`;
       }
 
       const defaultImgVal = config.defaultImage || tileDoc.texture?.src || "";
