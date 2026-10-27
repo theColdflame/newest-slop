@@ -28,6 +28,21 @@ Hooks.once("init", () => {
     type: Number,
     default: 150
   });
+
+  game.settings.register("wod5e-dynamic-tile-tracker", "defaultFileSource", {
+    name: game.i18n.localize("WOD5E_TILE.SettingsDefaultFileSource") || "Default Image Storage Location",
+    hint: game.i18n.localize("WOD5E_TILE.SettingsDefaultFileSourceHint") || "Select target storage location for file picker browsing (Standard User Data is 'data').",
+    scope: "world",
+    config: true,
+    type: String,
+    choices: {
+      "data": "User Data Directory (Data/)",
+      "s3": "Amazon S3 Storage Bucket",
+      "forgevtt": "The Forge User Storage",
+      "public": "Core / System / Module Directory"
+    },
+    default: "data"
+  });
 });
 
 Hooks.once("ready", () => {

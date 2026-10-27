@@ -149,7 +149,7 @@ export class WoD5eTileConfigExtension {
 
             <!-- Auto-fill pattern helper -->
             <div style="display: flex; gap: 6px; margin-bottom: 10px; align-items: center; background: rgba(0,0,0,0.2); padding: 6px; border-radius: 4px;">
-              <input type="text" id="wod5e-autofill-pattern" placeholder="e.g. tiles/hunger_{level}.webp" style="flex: 1; font-size: 0.85em;" title="Use {level} placeholder to auto fill image paths for levels 0 to N"/>
+              <input type="text" id="wod5e-autofill-pattern" placeholder="e.g. assets/wod5e/{type}_{level}.webp" style="flex: 1; font-size: 0.85em;" title="Use {level} placeholder to auto fill User Data image paths for levels 0 to N"/>
               <button type="button" id="wod5e-autofill-btn" class="button" style="padding: 2px 10px; font-size: 0.85em; white-space: nowrap;">
                 <i class="fas fa-wand-magic-sparkles"></i> Auto-fill Levels
               </button>
@@ -229,24 +229,35 @@ export class WoD5eTileConfigExtension {
     }
   }
 
-  static bindFilePicker(buttonEl, inputEl) {
+  static bindFilePicker(buttonEl, inputEl, options = {}) {
     if (!buttonEl || !inputEl) return;
     buttonEl.addEventListener('click', (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
 
-      const currentPath = inputEl.value || "";
+      let currentPath = inputEl.value || "";
+
+      // Default to User Data ("data") source
+      let fileSource = options.source || "data";
+      try {
+        if (typeof game !== "undefined" && game.settings) {
+          fileSource = game.settings.get("wod5e-dynamic-tile-tracker", "defaultFileSource") || fileSource;
+        }
+      } catch (e) {
+        fileSource = "data";
+      }
 
       if (typeof FilePicker !== "undefined") {
         const fp = new FilePicker({
           type: "image",
           current: currentPath,
+          source: fileSource,
           callback: (path) => {
             inputEl.value = path;
             inputEl.dispatchEvent(new Event("change", { bubbles: true }));
           }
         });
-        fp.browse(currentPath);
+        fp.browse(currentPath, { source: fileSource });
       } else {
         const fileInput = document.createElement("input");
         fileInput.type = "file";
@@ -254,7 +265,7 @@ export class WoD5eTileConfigExtension {
         fileInput.onchange = (e) => {
           const file = e.target.files[0];
           if (file) {
-            const fakePath = file.name ? `tiles/${file.name}` : URL.createObjectURL(file);
+            const fakePath = file.name ? `assets/wod5e/${file.name}` : URL.createObjectURL(file);
             inputEl.value = fakePath;
             inputEl.dispatchEvent(new Event("change", { bubbles: true }));
           }
