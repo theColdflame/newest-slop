@@ -272,15 +272,25 @@ export class WoD5eTileConfigExtension {
     const autoFillInput = tabContent.querySelector('#wod5e-autofill-pattern');
     const jsonInput = tabContent.querySelector('#wod5e-statmap-json-input');
 
+    const initialType = initialStatMap.statType || "hunger";
+    const initialMaps = { ...(initialStatMap.statMaps || {}) };
+    
+    if (!initialMaps[initialType] && initialStatMap.levels) {
+      initialMaps[initialType] = { ...initialStatMap.levels };
+    }
+
     let currentStatMap = {
       enabled: initialStatMap.enabled ?? true,
-      statType: initialStatMap.statType || "hunger",
-      levels: { ...(initialStatMap.levels || {}) }
+      statType: initialType,
+      statMaps: initialMaps,
+      levels: initialMaps[initialType] || {}
     };
 
     const updateJson = () => {
+      const type = typeSelect.value;
       currentStatMap.enabled = enableCheckbox.checked;
-      currentStatMap.statType = typeSelect.value;
+      currentStatMap.statType = type;
+      currentStatMap.levels = currentStatMap.statMaps[type] || {};
       jsonInput.value = JSON.stringify(currentStatMap);
     };
 
@@ -292,12 +302,18 @@ export class WoD5eTileConfigExtension {
 
     const renderLevelRows = () => {
       const type = typeSelect.value;
+      currentStatMap.statType = type;
+      if (!currentStatMap.statMaps[type]) {
+        currentStatMap.statMaps[type] = {};
+      }
+      currentStatMap.levels = currentStatMap.statMaps[type];
+
       const maxLvl = getMaxLevelsForType(type);
       gridContainer.innerHTML = "";
 
       for (let i = 0; i <= maxLvl; i++) {
         const valStr = String(i);
-        const existingImg = currentStatMap.levels[valStr] || "";
+        const existingImg = currentStatMap.statMaps[type][valStr] || "";
 
         let labelText = `Level ${i}`;
         if (type === "frenzy") {
@@ -342,12 +358,15 @@ export class WoD5eTileConfigExtension {
         const hideBtn = row.querySelector('.wod5e-level-hide-btn');
 
         input.addEventListener('change', (e) => {
-          currentStatMap.levels[valStr] = e.target.value.trim();
+          const val = e.target.value.trim();
+          currentStatMap.statMaps[type][valStr] = val;
+          currentStatMap.levels[valStr] = val;
           updateJson();
         });
 
         hideBtn.addEventListener('click', () => {
           input.value = "__NONE__";
+          currentStatMap.statMaps[type][valStr] = "__NONE__";
           currentStatMap.levels[valStr] = "__NONE__";
           updateJson();
         });
@@ -359,7 +378,6 @@ export class WoD5eTileConfigExtension {
     };
 
     typeSelect.addEventListener('change', () => {
-      currentStatMap.statType = typeSelect.value;
       renderLevelRows();
       updateJson();
     });
@@ -373,11 +391,16 @@ export class WoD5eTileConfigExtension {
       if (!pattern) return;
 
       const type = typeSelect.value;
+      if (!currentStatMap.statMaps[type]) {
+        currentStatMap.statMaps[type] = {};
+      }
+
       const maxLvl = getMaxLevelsForType(type);
 
       for (let i = 0; i <= maxLvl; i++) {
-        const path = pattern.replace(/\{level\}/g, i).replace(/\{lvl\}/g, i);
-        currentStatMap.levels[String(i)] = path;
+        let path = pattern.replace(/\{level\}/g, i).replace(/\{lvl\}/g, i);
+        path = path.replace(/\{type\}/g, type).replace(/\{stat\}/g, type);
+        currentStatMap.statMaps[type][String(i)] = path;
       }
 
       renderLevelRows();

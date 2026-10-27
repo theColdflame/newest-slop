@@ -135,7 +135,7 @@ export class WoD5eTileTrackerEngine {
    * Retrieves specific image assigned to the actor's current level for the mapped stat
    */
   static getStatLevelImage(statMap, stats) {
-    if (!statMap || !statMap.levels) return null;
+    if (!statMap) return null;
 
     const statType = statMap.statType;
     let currentVal = 0;
@@ -172,7 +172,10 @@ export class WoD5eTileTrackerEngine {
         currentVal = 0;
     }
 
-    const img = statMap.levels[currentVal] ?? statMap.levels[String(currentVal)];
+    const levelDict = statMap.statMaps?.[statType] || statMap.levels;
+    if (!levelDict) return null;
+
+    const img = levelDict[currentVal] ?? levelDict[String(currentVal)];
     if (img === undefined || img === null) return null;
     return String(img).trim();
   }

@@ -375,11 +375,16 @@ function App() {
   const [wpSup, setWpSup] = useState(1);
   const [isDownloading, setIsDownloading] = useState(false);
 
-  // Stat level images state
+  // Stat level maps per stat type
   const [statMapType, setStatMapType] = useState("hunger");
-  const [statLevelImages, setStatLevelImages] = useState(DEFAULT_HUNGER_LEVEL_MAP);
-  const [autoFillPattern, setAutoFillPattern] = useState("modules/wod5e-dynamic-tile-tracker/assets/vampire_hunger_{level}.webp");
+  const [allStatMaps, setAllStatMaps] = useState({
+    hunger: DEFAULT_HUNGER_LEVEL_MAP,
+    frenzy: DEFAULT_FRENZY_LEVEL_MAP
+  });
+  const [autoFillPattern, setAutoFillPattern] = useState("modules/wod5e-dynamic-tile-tracker/assets/{type}_{level}.webp");
   const [defaultImage, setDefaultImage] = useState(DEFAULT_HUNGER_LEVEL_MAP["0"]);
+
+  const statLevelImages = allStatMaps[statMapType] || {};
 
   // Priority Rules State
   const [rules, setRules] = useState([
@@ -402,7 +407,19 @@ function App() {
 
   // Tile evaluation computation
   const tileEvaluation = useMemo(() => {
-    const currentVal = statMapType === "hunger" ? hungerVal : (statMapType === "frenzy" ? (isFrenzied ? 1 : 0) : 0);
+    let currentVal = 0;
+    switch (statMapType) {
+      case "hunger": currentVal = hungerVal; break;
+      case "frenzy": currentVal = isFrenzied ? 1 : 0; break;
+      case "health_agg": currentVal = healthAgg; break;
+      case "health_sup": currentVal = healthSup; break;
+      case "health_total": currentVal = totalHealthDamage; break;
+      case "health_remaining": currentVal = Math.max(0, healthMax - totalHealthDamage); break;
+      case "willpower_agg": currentVal = wpAgg; break;
+      case "willpower_sup": currentVal = wpSup; break;
+      case "willpower_total": currentVal = wpAgg + wpSup; break;
+      default: currentVal = 0;
+    }
 
     if (statLevelImages) {
       const levelImg = statLevelImages[String(currentVal)];
